@@ -3,3 +3,5 @@ packages:
   - "sdk"
   - "indexer"
   - "examples"
+allowBuilds:
+  esbuild: true
