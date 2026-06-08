@@ -2,8 +2,8 @@ import { Address } from "viem";
 import { SupportedChainId } from "../types";
 
 export const AUCTION_ADDRESSES: Record<SupportedChainId, Address> = {
-  84532: "0x...", // Base Sepolia — fill after deployment
-  8453: "0x...",  // Base Mainnet — fill after deployment
+  84532: "0xadc3e02e962eed3856d7bee0315f84d187be1fea",
+  8453: "0x0000000000000000000000000000000000000000", // not yet deployed
 };
 
 export const USDC_ADDRESSES: Record<SupportedChainId, Address> = {

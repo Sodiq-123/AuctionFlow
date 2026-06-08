@@ -14,5 +14,8 @@
     "url": "git+https://github.com/Sodiq-123/AuctionFlow.git"
   },
   "author": "Sodiq Agunbiade",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "tsx": "^4.22.4"
+  }
 }
