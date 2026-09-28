@@ -17,6 +17,8 @@ export const auction = onchainTable("auction", (t) => ({
   currentPrice: t.bigint().notNull(),
   createdAt: t.bigint().notNull(),
   completedAt: t.bigint(),
+  proceedsWithdrawn: t.boolean().notNull().default(false),
+  proceedsWithdrawnAt: t.bigint(),
   transactionHash: t.hex().notNull(),
 }));
 

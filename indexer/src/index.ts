@@ -168,3 +168,18 @@ ponder.on("TokenAuction:AuctionMigrated", async ({ event, context }) => {
     .update(schema.auction, { id: auctionId })
     .set({ state: "MIGRATED" });
 });
+
+// ─── ProceedsWithdrawn ───
+
+ponder.on("TokenAuction:ProceedsWithdrawn", async ({ event, context }) => {
+  const { db } = context;
+  const { auctionId: rawAuctionId } = event.args;
+  const auctionId = rawAuctionId.toString();
+
+  await db
+    .update(schema.auction, { id: auctionId })
+    .set({
+      proceedsWithdrawn: true,
+      proceedsWithdrawnAt: event.block.timestamp,
+    });
+});
