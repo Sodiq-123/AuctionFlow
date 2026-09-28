@@ -66,7 +66,7 @@ contract TokenAuctionBuyTest is Test {
 
     function test_buyTokens_transfersPaymentAndMints() public {
         uint256 id = _createAuction(MAX_RAISE);
-        uint256 amount = 1_000;
+        uint256 amount = 1_000e18;
 
         uint256 cost = BondingCurve.calculateBuyCost(0, amount, BASE_PRICE, SLOPE);
         uint256 fee = (cost * FEE_BPS) / 10_000;
@@ -90,7 +90,7 @@ contract TokenAuctionBuyTest is Test {
 
     function test_buyTokens_emitsEvent() public {
         uint256 id = _createAuction(MAX_RAISE);
-        uint256 amount = 1_000;
+        uint256 amount = 1_000e18;
         uint256 cost = BondingCurve.calculateBuyCost(0, amount, BASE_PRICE, SLOPE);
         uint256 fee = (cost * FEE_BPS) / 10_000;
 
@@ -104,7 +104,7 @@ contract TokenAuctionBuyTest is Test {
 
     function test_buyTokens_secondBuyCostsMore() public {
         uint256 id = _createAuction(MAX_RAISE);
-        uint256 amount = 1_000;
+        uint256 amount = 1_000e18;
 
         uint256 firstCost = BondingCurve.calculateBuyCost(0, amount, BASE_PRICE, SLOPE);
         uint256 secondCost = BondingCurve.calculateBuyCost(amount, amount, BASE_PRICE, SLOPE);
@@ -132,7 +132,7 @@ contract TokenAuctionBuyTest is Test {
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
         vm.expectRevert("Not started");
-        auction.buyTokens(id, 1_000);
+        auction.buyTokens(id, 1_000e18);
         vm.stopPrank();
     }
 
@@ -142,14 +142,14 @@ contract TokenAuctionBuyTest is Test {
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
         vm.expectRevert("Ended");
-        auction.buyTokens(id, 1_000);
+        auction.buyTokens(id, 1_000e18);
         vm.stopPrank();
     }
 
     function test_buyTokens_revertsWhenExceedsMaxRaise() public {
         // Tiny max raise so a modest buy blows past it.
         uint256 id = _createAuction(1e6);
-        uint256 amount = 1_000; // cost ~ 1.0005e9 >> 1e6
+        uint256 amount = 1_000e18; // cost ~ 1.0005e9 >> 1e6
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
         vm.expectRevert("Exceeds max raise");
@@ -158,7 +158,7 @@ contract TokenAuctionBuyTest is Test {
     }
 
     function test_buyTokens_autoCompletesAtMaxRaise() public {
-        uint256 amount = 1_000;
+        uint256 amount = 1_000e18;
         uint256 cost = BondingCurve.calculateBuyCost(0, amount, BASE_PRICE, SLOPE);
         // Set maxRaise exactly to this buy's cost so it auto-completes.
         uint256 id = _createAuction(cost);
@@ -173,7 +173,7 @@ contract TokenAuctionBuyTest is Test {
 
         // Further buys revert because the auction is no longer active.
         vm.expectRevert("Auction not active");
-        auction.buyTokens(id, 1);
+        auction.buyTokens(id, 1e18);
         vm.stopPrank();
     }
 }

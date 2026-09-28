@@ -1,6 +1,10 @@
 import { ponder } from "ponder:registry";
 import * as schema from "../ponder.schema";
 
+// Mirrors BondingCurve.TOKEN_SCALE: prices are per whole token, supplies and
+// amounts are in token wei (18 decimals).
+const TOKEN_SCALE = 10n ** 18n;
+
 // ─── AuctionCreated ───
 
 ponder.on("TokenAuction:AuctionCreated", async ({ event, context }) => {
@@ -72,10 +76,11 @@ ponder.on("TokenAuction:TokensPurchased", async ({ event, context }) => {
 
   const auctionRecord = await db.find(schema.auction, { id: auctionId });
   const newPrice = auctionRecord
-    ? auctionRecord.basePrice + auctionRecord.slope * newTotalSold
+    ? auctionRecord.basePrice + (auctionRecord.slope * newTotalSold) / TOKEN_SCALE
     : 0n;
 
-  const pricePerToken = amount > 0n ? cost / amount : 0n;
+  // Average price paid per whole token, in payment-token units.
+  const pricePerToken = amount > 0n ? (cost * TOKEN_SCALE) / amount : 0n;
 
   await db.insert(schema.purchase).values({
     id: purchaseId,
@@ -118,7 +123,7 @@ ponder.on("TokenAuction:TokensPurchased", async ({ event, context }) => {
     }));
 
   await db.insert(schema.priceSnapshot).values({
-    id: `${auctionId}-${event.block.number}`,
+    id: purchaseId,
     auctionId,
     price: newPrice,
     totalSold: newTotalSold,

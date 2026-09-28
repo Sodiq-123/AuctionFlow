@@ -38,7 +38,7 @@ contract BuyHandler is Test {
 
     function buy(uint256 actorSeed, uint256 amount) external {
         address actor = actors[actorSeed % actors.length];
-        amount = bound(amount, 1, 1e6);
+        amount = bound(amount, 1e15, 1e21); // 0.001 .. 1,000 tokens
 
         vm.prank(actor);
         try auction.buyTokens(auctionId, amount) {
@@ -61,7 +61,7 @@ contract TokenAuctionInvariantTest is Test {
 
     uint256 constant BASE_PRICE = 1e6;
     uint256 constant SLOPE = 1e3;
-    uint256 constant MAX_RAISE = 1e18;
+    uint256 constant MAX_RAISE = 1e10; // 10,000 USDC — reachable under fuzzing
     uint256 constant MAX_SUPPLY = 1_000_000_000e18;
 
     function setUp() public {

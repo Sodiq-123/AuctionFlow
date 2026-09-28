@@ -61,7 +61,7 @@ contract TokenAuctionWithdrawTest is Test {
 
     function test_withdrawProceeds_paysCreatorAfterCompletion() public {
         uint256 id = _createAuction(MAX_RAISE);
-        _buy(id, 1_000);
+        _buy(id, 1_000e18);
         uint256 raised = _raised(id);
         assertGt(raised, 0, "auction raised funds");
         assertEq(usdc.balanceOf(address(auction)), raised, "contract custodies proceeds");
@@ -82,7 +82,7 @@ contract TokenAuctionWithdrawTest is Test {
     }
 
     function test_withdrawProceeds_worksAfterAutoCompletion() public {
-        uint256 amount = 1_000;
+        uint256 amount = 1_000e18;
         uint256 cost = BondingCurve.calculateBuyCost(0, amount, BASE_PRICE, SLOPE);
         uint256 id = _createAuction(cost); // maxRaise == one buy, auto-completes
         _buy(id, amount);
@@ -96,7 +96,7 @@ contract TokenAuctionWithdrawTest is Test {
 
     function test_withdrawProceeds_revertsForNonCreator() public {
         uint256 id = _createAuction(MAX_RAISE);
-        _buy(id, 1_000);
+        _buy(id, 1_000e18);
         vm.warp(endTime + 1);
         vm.prank(creator);
         auction.completeAuction(id);
@@ -108,7 +108,7 @@ contract TokenAuctionWithdrawTest is Test {
 
     function test_withdrawProceeds_revertsWhileAuctionActive() public {
         uint256 id = _createAuction(MAX_RAISE);
-        _buy(id, 1_000);
+        _buy(id, 1_000e18);
 
         vm.prank(creator);
         vm.expectRevert("Auction not completed");
@@ -117,7 +117,7 @@ contract TokenAuctionWithdrawTest is Test {
 
     function test_withdrawProceeds_revertsOnSecondWithdrawal() public {
         uint256 id = _createAuction(MAX_RAISE);
-        _buy(id, 1_000);
+        _buy(id, 1_000e18);
         vm.warp(endTime + 1);
         vm.prank(creator);
         auction.completeAuction(id);
@@ -145,7 +145,7 @@ contract TokenAuctionWithdrawTest is Test {
 
     function test_withdrawProceeds_doesNotTouchOtherAuctionsFunds() public {
         uint256 first = _createAuction(MAX_RAISE);
-        _buy(first, 1_000);
+        _buy(first, 1_000e18);
         uint256 firstRaised = _raised(first);
 
         // A second auction from the same creator, also funded.
@@ -157,7 +157,7 @@ contract TokenAuctionWithdrawTest is Test {
             laterStart, block.timestamp + 72 hours
         );
         vm.warp(laterStart);
-        _buy(second, 500);
+        _buy(second, 500e18);
         uint256 secondRaised = _raised(second);
 
         vm.warp(endTime + 1);

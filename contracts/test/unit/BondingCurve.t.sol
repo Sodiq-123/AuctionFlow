@@ -10,11 +10,11 @@ contract BondingCurveTest is Test {
     }
 
     // Test: the integral formula — buying 2 tokens from supply = 0
-    // Cost = basePrice * 2 + slope * (2 * (2 * 0+ 2 ))/2 = 2 * base + slope * 2
+    // Two whole tokens from supply 0, normalised by 1e18:
     function test_buyCostIsIntegral() public pure {
-        uint256 cost = BondingCurve.calculateBuyCost(0, 2, 1e6, 1e3);
-        // linearCost = 1e6 * 2 = 2e6
-        // curveCost = (1e3 * 2 * (0 + 2)) / 2 = 2000
+        uint256 cost = BondingCurve.calculateBuyCost(0, 2e18, 1e6, 1e3);
+        // linearCost = 1e6 * 2e18 / 1e18 = 2e6
+        // curveCost  = 1e3 * 2e18 * 2e18 / (2 * 1e36) = 2000
         assertEq(cost, 2_002_000);
     }
 }

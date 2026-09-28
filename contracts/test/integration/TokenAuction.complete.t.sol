@@ -102,7 +102,7 @@ contract TokenAuctionCompleteTest is Test {
     }
 
     function test_completeAuction_revertsIfAutoCompletedViaMaxRaise() public {
-        uint256 amount = 1_000;
+        uint256 amount = 1_000e18;
         uint256 cost = BondingCurve.calculateBuyCost(0, amount, BASE_PRICE, SLOPE);
         uint256 id = _createAuction(cost); // maxRaise == one buy's cost
 
