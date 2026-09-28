@@ -22,9 +22,14 @@ contract TokenAuctionCreateTest is Test {
     }
 
     function test_createAuction_emitsEvent() public {
-        vm.prank(creator);
+        // Only the indexed topics (auctionId, creator) are checked; the token
+        // address is assigned inside createAuction, so data is not matched.
         vm.expectEmit(true, true, false, false);
-        // emit AuctionCreated(0, creator, ...)
+        emit TokenAuction.AuctionCreated(
+            0, creator, address(0), address(usdc), 1e6, 1e3, 50_000e6,
+            block.timestamp + 1 hours, block.timestamp + 72 hours
+        );
+        vm.prank(creator);
         auction.createAuction(
             "TestToken", "TT", 1_000_000e18,
             address(usdc),
@@ -32,6 +37,51 @@ contract TokenAuctionCreateTest is Test {
             50_000e6,
             block.timestamp + 1 hours,
             block.timestamp + 72 hours
+        );
+    }
+
+    function test_createAuction_incrementsIdAndStoresConfig() public {
+        vm.prank(creator);
+        uint256 id = auction.createAuction(
+            "TestToken", "TT", 1_000_000e18,
+            address(usdc), 1e6, 1e3, 50_000e6,
+            block.timestamp + 1 hours, block.timestamp + 72 hours
+        );
+        assertEq(id, 0, "first auction id is 0");
+        assertEq(auction.auctionCount(), 1, "count incremented");
+
+        (
+            TokenAuction.AuctionConfig memory cfg,
+            TokenAuction.AuctionState state,
+            uint256 raised,
+            uint256 sold
+        ) = auction.auctions(id);
+
+        assertEq(cfg.creator, creator, "creator stored");
+        assertEq(address(cfg.paymentToken), address(usdc), "payment token stored");
+        assertEq(cfg.basePrice, 1e6);
+        assertEq(cfg.protocolFeeBps, 250, "inherits default fee");
+        assertEq(uint256(state), uint256(TokenAuction.AuctionState.ACTIVE), "starts active");
+        assertEq(raised, 0);
+        assertEq(sold, 0);
+    }
+
+    function test_createAuction_revertsWhenStartInPast() public {
+        vm.warp(1000);
+        vm.prank(creator);
+        vm.expectRevert("Start must be in future");
+        auction.createAuction(
+            "TestToken", "TT", 1_000_000e18, address(usdc), 1e6, 1e3, 50_000e6,
+            block.timestamp - 1, block.timestamp + 72 hours
+        );
+    }
+
+    function test_createAuction_revertsWhenEndBeforeStart() public {
+        vm.prank(creator);
+        vm.expectRevert("End must be after start");
+        auction.createAuction(
+            "TestToken", "TT", 1_000_000e18, address(usdc), 1e6, 1e3, 50_000e6,
+            block.timestamp + 72 hours, block.timestamp + 1 hours
         );
     }
 }

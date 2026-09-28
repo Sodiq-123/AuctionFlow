@@ -1,36 +1,61 @@
 pragma solidity ^0.8.24;
+
 import "forge-std/Test.sol";
-import "../../src/TokenAuction.sol";
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "../../src/AuctionToken.sol";
 
-contract MockUSDC is ERC20 {
-    constructor() ERC20("Mock USDC", "mUSDC") {
-        _mint(msg.sender, 1_000_000 * 1e6);
-    }
-}
+contract AuctionTokenTest is Test {
+    AuctionToken token;
+    address owner = makeAddr("owner");
+    address alice = makeAddr("alice");
 
-contract TokenAuctionCreateTest is Test {
-    TokenAuction auction;
-    MockUSDC usdc;
-    address creator = makeAddr("creator");
-    address feeRecipient = makeAddr("feeRecipient");
+    uint256 constant MAX_SUPPLY = 1_000_000e18;
 
     function setUp() public {
-        usdc = new MockUSDC();
-        auction = new TokenAuction(feeRecipient, 250);
-        usdc.transfer(creator, 10_000 * 1e6);
+        token = new AuctionToken("Auction Token", "AUCT", MAX_SUPPLY, owner);
     }
 
-    function test_createAuction_emitsEvent() public {
-        vm.prank(creator);
-        vm.expectEmit(true, true, false, false);
-        auction.createAuction(
-            "TestToken", "TT", 1_000_000e18,
-            address(usdc),
-            1e6, 1e3,
-            50_000e6,
-            block.timestamp + 1 hours,
-            block.timestamp + 72 hours
-        );
+    function test_metadataAndOwner() public view {
+        assertEq(token.name(), "Auction Token");
+        assertEq(token.symbol(), "AUCT");
+        assertEq(token.maxSupply(), MAX_SUPPLY);
+        assertEq(token.owner(), owner);
+        assertEq(token.totalSupply(), 0);
+    }
+
+    function test_owner_canMint() public {
+        vm.prank(owner);
+        token.mint(alice, 100e18);
+        assertEq(token.balanceOf(alice), 100e18);
+        assertEq(token.totalSupply(), 100e18);
+    }
+
+    function test_mint_revertsForNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert(); // Ownable: caller is not the owner
+        token.mint(alice, 100e18);
+    }
+
+    function test_mint_revertsWhenExceedingMaxSupply() public {
+        vm.prank(owner);
+        vm.expectRevert("Exceeds max supply");
+        token.mint(alice, MAX_SUPPLY + 1);
+    }
+
+    function test_mint_allowsExactlyMaxSupply() public {
+        vm.prank(owner);
+        token.mint(alice, MAX_SUPPLY);
+        assertEq(token.totalSupply(), MAX_SUPPLY);
+
+        // A further mint of even 1 wei must now exceed the cap.
+        vm.prank(owner);
+        vm.expectRevert("Exceeds max supply");
+        token.mint(alice, 1);
+    }
+
+    function testFuzz_mint_neverExceedsMaxSupply(uint256 amount) public {
+        amount = bound(amount, 0, MAX_SUPPLY);
+        vm.prank(owner);
+        token.mint(alice, amount);
+        assertLe(token.totalSupply(), MAX_SUPPLY);
     }
 }
