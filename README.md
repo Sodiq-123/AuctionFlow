@@ -29,7 +29,7 @@ An open-source token price discovery & indexing platform — a TypeScript SDK, P
                Base + Base Sepolia
 ```
 
-**Deployed contract (Base Sepolia):** [`0xadc3e02e962eed3856d7bee0315f84d187be1fea`](https://sepolia.basescan.org/address/0xadc3e02e962eed3856d7bee0315f84d187be1fea)
+**Deployed contract (Base Sepolia):** [`0x91519Ca6C0B7a0E116A590C89A095199FF9f0054`](https://sepolia.basescan.org/address/0x91519Ca6C0B7a0E116A590C89A095199FF9f0054)
 
 ---
 
@@ -167,10 +167,12 @@ Ponder-based indexer that listens to on-chain events and exposes a **GraphQL API
 
 ```bash
 cd indexer
-docker compose up -d        # start PostgreSQL
+cp .env.example .env.local  # then set PONDER_RPC_URL_84532
 pnpm dev                    # start Ponder (hot reload)
 # GraphQL playground: http://localhost:42069/graphql
 ```
+
+With no `DATABASE_URL`, Ponder stores its data in an embedded Postgres (PGlite) under `indexer/.ponder`, so nothing else needs to run. To index into a real Postgres, set `DATABASE_URL` in `.env.local` — either to your own server, or to the bundled container (`docker compose up -d`, exposed on port 5433 so it can't collide with a local install on 5432).
 
 ### Multi-chain (Base + Base Sepolia)
 
@@ -181,9 +183,9 @@ pnpm dev --config ponder.config.multichain.ts
 ### Example queries
 
 ```graphql
-# All active auctions
+# Active auctions, newest first
 query ActiveAuctions {
-  auctions(orderBy: "createdAt", orderDirection: "desc") {
+  auctions(where: { state: "ACTIVE" }, orderBy: "createdAt", orderDirection: "desc") {
     items {
       id
       creator
@@ -198,13 +200,11 @@ query ActiveAuctions {
 
 # Price chart data for an auction
 query AuctionPriceChart($id: String!) {
-  auction(id: $id) {
-    priceSnapshots(orderBy: "blockNumber", orderDirection: "asc") {
-      items {
-        price
-        totalSold
-        timestamp
-      }
+  priceSnapshots(where: { auctionId: $id }, orderBy: "blockNumber", orderDirection: "asc") {
+    items {
+      price
+      totalSold
+      timestamp
     }
   }
 }
