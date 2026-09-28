@@ -1,12 +1,12 @@
 import {
   createPublicClient,
-  createWalletClient,
   http,
   PublicClient,
   WalletClient,
   Chain,
   Address,
   Hash,
+  zeroAddress,
 } from "viem";
 import { AuctionBuilder } from "./builders/auction-builder";
 import { AuctionConfig, AuctionData, BuyQuote, SupportedChainId } from "./types";
@@ -14,6 +14,24 @@ import { AUCTION_ADDRESSES } from "./constants/addresses";
 import { tokenAuctionAbi } from "./abis/token-auction";
 import { calculateBuyQuote } from "./utils/bonding-curve";
 import { CHAINS } from "./utils/chains";
+
+/** Shape of the nested tuple returned by the on-chain `auctions(id)` getter. */
+interface RawAuction {
+  config: {
+    token: Address;
+    paymentToken: Address;
+    basePrice: bigint;
+    slope: bigint;
+    maxRaise: bigint;
+    startTime: bigint;
+    endTime: bigint;
+    creator: Address;
+    protocolFeeBps: bigint;
+  };
+  state: number;
+  totalRaised: bigint;
+  totalSold: bigint;
+}
 
 export class AuctionFlowSDK {
   public readonly publicClient: PublicClient;
@@ -30,6 +48,16 @@ export class AuctionFlowSDK {
     this.chainId = params.chainId;
     this.chain = CHAINS[params.chainId];
     this.auctionAddress = AUCTION_ADDRESSES[params.chainId];
+
+    if (this.auctionAddress === zeroAddress) {
+      throw new Error(
+        `AuctionFlow is not yet deployed on chain ${params.chainId}. ` +
+          `Supported chains: ${Object.entries(AUCTION_ADDRESSES)
+            .filter(([, addr]) => addr !== zeroAddress)
+            .map(([id]) => id)
+            .join(", ")}.`
+      );
+    }
 
     this.publicClient = createPublicClient({
       chain: this.chain,
@@ -84,6 +112,35 @@ export class AuctionFlowSDK {
     return hash;
   }
 
+  /**
+   * Withdraw a completed auction's raised payment tokens to its creator.
+   * Only the auction's creator can call this, and only once.
+   */
+  async withdrawProceeds(auctionId: bigint): Promise<Hash> {
+    if (!this.walletClient) throw new Error("Wallet client required");
+
+    const hash = await this.walletClient.writeContract({
+      chain: this.chain,
+      account: this.walletClient.account!,
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "withdrawProceeds",
+      args: [auctionId],
+    });
+
+    return hash;
+  }
+
+  // Read: Has an auction's creator already withdrawn its proceeds?
+  async hasWithdrawnProceeds(auctionId: bigint): Promise<boolean> {
+    return this.publicClient.readContract({
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "proceedsWithdrawn",
+      args: [auctionId],
+    }) as Promise<boolean>;
+  }
+
   // Read: Get auction data
   async getAuction(auctionId: bigint): Promise<AuctionData> {
     const result = await this.publicClient.readContract({
@@ -94,7 +151,7 @@ export class AuctionFlowSDK {
     });
 
     // Parse the tuple returned by the contract
-    return this.parseAuctionResult(auctionId, result);
+    return this.parseAuctionResult(auctionId, result as unknown as RawAuction);
   }
 
   // Read: Get buy quote (off-chain calculation)
@@ -126,8 +183,8 @@ export class AuctionFlowSDK {
     }) as Promise<bigint>;
   }
 
-  private parseAuctionResult(id: bigint, raw: any): AuctionData {
-    // Adapt based on actual struct layout from ABI
+  private parseAuctionResult(id: bigint, raw: RawAuction): AuctionData {
+    // Mirrors the AuctionData struct returned by the public `auctions` getter.
     return {
       id,
       token: raw.config.token,

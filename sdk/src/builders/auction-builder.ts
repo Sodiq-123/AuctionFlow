@@ -45,6 +45,16 @@ export class AuctionBuilder {
       }
     }
 
-    return this.config as AuctionConfig;
+    const config = this.config as AuctionConfig;
+
+    if (config.maxSupply <= 0n) throw new Error("maxSupply must be greater than 0");
+    if (config.basePrice <= 0n) throw new Error("basePrice must be greater than 0");
+    if (config.slope < 0n) throw new Error("slope must not be negative");
+    if (config.maxRaise <= 0n) throw new Error("maxRaise must be greater than 0");
+    if (config.startTime >= config.endTime) {
+      throw new Error("startTime must be before endTime");
+    }
+
+    return config;
   }
 }
