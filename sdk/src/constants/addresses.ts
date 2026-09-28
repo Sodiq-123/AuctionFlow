@@ -2,7 +2,7 @@ import { Address } from "viem";
 import { SupportedChainId } from "../types";
 
 export const AUCTION_ADDRESSES: Record<SupportedChainId, Address> = {
-  84532: "0xadc3e02e962eed3856d7bee0315f84d187be1fea",
+  84532: "0x91519ca6c0b7a0e116a590c89a095199ff9f0054",
   8453: "0x0000000000000000000000000000000000000000", // not yet deployed
 };
 
