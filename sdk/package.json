@@ -1,6 +1,6 @@
 {
   "name": "auctionflow-sdk",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Type-safe TypeScript SDK for the AuctionFlow bonding-curve token auction protocol, built on viem.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
