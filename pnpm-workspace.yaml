@@ -1,5 +1,4 @@
 packages:
-  - "contracts"
   - "sdk"
   - "indexer"
   - "examples"

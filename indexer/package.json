@@ -1,5 +1,5 @@
 {
-  "name": "my-app",
+  "name": "auctionflow-indexer",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -12,9 +12,9 @@
     "typecheck": "tsc"
   },
   "dependencies": {
+    "hono": "^4.13.10",
     "ponder": "^0.16.6",
-    "hono": "^4.5.0",
-    "viem": "^2.21.3"
+    "viem": "^2.56.9"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",
@@ -24,5 +24,6 @@
   },
   "engines": {
     "node": ">=18.14"
-  }
+  },
+  "description": "Ponder indexer and GraphQL API for the AuctionFlow protocol"
 }

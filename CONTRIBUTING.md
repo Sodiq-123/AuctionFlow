@@ -37,8 +37,7 @@ pnpm test:contracts
 pnpm test:sdk
 
 # Type-check everything
-pnpm --filter sdk exec tsc --noEmit
-pnpm --filter indexer exec tsc --noEmit
+pnpm typecheck
 ```
 
 ## Submitting a pull request

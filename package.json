@@ -4,10 +4,11 @@
   "private": true,
   "description": "An open-source token price discovery & indexing platform",
   "scripts": {
-    "build": "pnpm --filter sdk build",
-    "test:contracts": "pnpm --filter contracts test",
-    "test:sdk": "pnpm --filter sdk test",
-    "dev:indexer": "pnpm --filter indexer dev"
+    "build": "pnpm --filter auctionflow-sdk build",
+    "test:contracts": "forge test --root contracts",
+    "test:sdk": "pnpm --filter auctionflow-sdk test",
+    "typecheck": "pnpm --filter auctionflow-sdk exec tsc --noEmit && pnpm --filter auctionflow-indexer exec tsc --noEmit",
+    "dev:indexer": "pnpm --filter auctionflow-indexer dev"
   },
   "repository": {
     "type": "git",
@@ -17,6 +18,6 @@
   "license": "MIT",
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
-    "tsx": "^4.22.4"
+    "tsx": "^4.23.15"
   }
 }

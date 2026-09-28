@@ -46,7 +46,7 @@
   },
   "packageManager": "pnpm@10.33.4",
   "dependencies": {
-    "viem": "^2.52.0"
+    "viem": "^2.56.9"
   },
   "devDependencies": {
     "@types/node": "^20.19.41",
