@@ -1,28 +1,49 @@
 {
   "name": "auctionflow-sdk",
   "version": "1.0.0",
-  "description": "",
+  "description": "Type-safe TypeScript SDK for the AuctionFlow bonding-curve token auction protocol, built on viem.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
     "dev": "tsup --watch"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "auction",
+    "bonding-curve",
+    "token",
+    "defi",
+    "ethereum",
+    "evm",
+    "base",
+    "viem",
+    "web3",
+    "price-discovery"
+  ],
+  "author": "Sodiq Agunbiade",
+  "license": "MIT",
+  "homepage": "https://github.com/Sodiq-123/AuctionFlow/tree/main/sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sodiq-123/AuctionFlow.git",
+    "directory": "sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/Sodiq-123/AuctionFlow/issues"
+  },
   "packageManager": "pnpm@10.33.4",
   "dependencies": {
     "viem": "^2.52.0"
