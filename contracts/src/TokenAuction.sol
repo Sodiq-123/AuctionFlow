@@ -35,6 +35,7 @@ contract TokenAuction is ReentrancyGuard, Ownable {
     uint256 public auctionCount;
     mapping(uint256 => AuctionData) public auctions;
     mapping(uint256 => mapping(address => uint256)) public userPurchases;
+    mapping(uint256 => bool) public proceedsWithdrawn;
 
     // Protocol
     address public protocolFeeRecipient;
@@ -65,6 +66,7 @@ contract TokenAuction is ReentrancyGuard, Ownable {
 
     event AuctionCompleted(uint256 indexed auctionId, uint256 totalRaised, uint256 totalSold);
     event AuctionMigrated(uint256 indexed auctionId, address liquidityPool);
+    event ProceedsWithdrawn(uint256 indexed auctionId, address indexed creator, uint256 amount);
 
     constructor(address feeRecipient_, uint256 defaultFeeBps_) Ownable(msg.sender) {
         protocolFeeRecipient = feeRecipient_;
@@ -168,6 +170,26 @@ contract TokenAuction is ReentrancyGuard, Ownable {
 
         auction.state = AuctionState.COMPLETED;
         emit AuctionCompleted(auctionId, auction.totalRaised, auction.totalSold);
+    }
+
+    /// @notice Transfer an auction's raised payment tokens to its creator.
+    /// @dev Callable once, by the creator, after the auction reaches COMPLETED.
+    ///      Protocol fees are routed to the fee recipient at buy time, so the
+    ///      contract custodies exactly `totalRaised` for this auction.
+    function withdrawProceeds(uint256 auctionId) external nonReentrant {
+        AuctionData storage auction = auctions[auctionId];
+        require(msg.sender == auction.config.creator, "Not creator");
+        require(auction.state == AuctionState.COMPLETED, "Auction not completed");
+        require(!proceedsWithdrawn[auctionId], "Already withdrawn");
+
+        uint256 amount = auction.totalRaised;
+        require(amount > 0, "Nothing to withdraw");
+
+        // Effects before interaction.
+        proceedsWithdrawn[auctionId] = true;
+        auction.config.paymentToken.safeTransfer(auction.config.creator, amount);
+
+        emit ProceedsWithdrawn(auctionId, auction.config.creator, amount);
     }
 
     // View functions
