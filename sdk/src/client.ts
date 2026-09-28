@@ -44,18 +44,26 @@ export class AuctionFlowSDK {
     chainId: SupportedChainId;
     rpcUrl: string;
     walletClient?: WalletClient;
+    auctionAddress?: Address;
   }) {
     this.chainId = params.chainId;
     this.chain = CHAINS[params.chainId];
-    this.auctionAddress = AUCTION_ADDRESSES[params.chainId];
+    this.auctionAddress = params.auctionAddress ?? AUCTION_ADDRESSES[params.chainId];
+
+    if (params.auctionAddress === zeroAddress) {
+      throw new Error(
+        "auctionAddress must not be the zero address."
+      );
+    }
 
     if (this.auctionAddress === zeroAddress) {
       throw new Error(
-        `AuctionFlow is not yet deployed on chain ${params.chainId}. ` +
-          `Supported chains: ${Object.entries(AUCTION_ADDRESSES)
+        `AuctionFlow has no canonical deployment on chain ${params.chainId}. ` +
+          `Chains with a built-in deployment: ${Object.entries(AUCTION_ADDRESSES)
             .filter(([, addr]) => addr !== zeroAddress)
             .map(([id]) => id)
-            .join(", ")}.`
+            .join(", ")}. ` +
+          `Pass \`auctionAddress\` to use your own deployment.`
       );
     }
 

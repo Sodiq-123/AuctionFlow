@@ -48,12 +48,51 @@ describe("AuctionBuilder", () => {
   });
 });
 
+const CUSTOM_AUCTION = "0x1111111111111111111111111111111111111111" as const;
+
 describe("AuctionFlowSDK construction", () => {
-  it("throws for a chain without a deployed contract (Base mainnet)", () => {
+  it("throws for a chain without a canonical deployment (Base mainnet)", () => {
     expect(
       () =>
         new AuctionFlowSDK({ chainId: 8453, rpcUrl: "https://mainnet.base.org" })
-    ).toThrow(/not yet deployed/);
+    ).toThrow(/no canonical deployment/);
+  });
+
+  it("tells you about the auctionAddress escape hatch in that error", () => {
+    expect(
+      () =>
+        new AuctionFlowSDK({ chainId: 8453, rpcUrl: "https://mainnet.base.org" })
+    ).toThrow(/auctionAddress/);
+  });
+
+  it("accepts a custom auctionAddress on a chain with no deployment", () => {
+    const sdk = new AuctionFlowSDK({
+      chainId: 8453,
+      rpcUrl: "https://mainnet.base.org",
+      auctionAddress: CUSTOM_AUCTION,
+    });
+    expect(sdk.auctionAddress).toBe(CUSTOM_AUCTION);
+    expect(sdk.chainId).toBe(8453);
+  });
+
+  it("lets a custom auctionAddress override the built-in one", () => {
+    const sdk = new AuctionFlowSDK({
+      chainId: 84532,
+      rpcUrl: "https://sepolia.base.org",
+      auctionAddress: CUSTOM_AUCTION,
+    });
+    expect(sdk.auctionAddress).toBe(CUSTOM_AUCTION);
+  });
+
+  it("rejects an explicitly zero auctionAddress", () => {
+    expect(
+      () =>
+        new AuctionFlowSDK({
+          chainId: 84532,
+          rpcUrl: "https://sepolia.base.org",
+          auctionAddress: "0x0000000000000000000000000000000000000000",
+        })
+    ).toThrow(/must not be the zero address/);
   });
 
   it("constructs against Base Sepolia", () => {

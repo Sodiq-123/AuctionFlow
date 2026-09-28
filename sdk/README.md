@@ -36,6 +36,23 @@ const sdk = new AuctionFlowSDK({
 });
 ```
 
+### Using your own deployment
+
+AuctionFlow only has a canonical deployment on Base Sepolia. To point the SDK at
+a deployment you run yourself — on Base mainnet, a local fork, or anywhere else
+`TokenAuction.sol` is deployed — pass `auctionAddress`:
+
+```typescript
+const sdk = new AuctionFlowSDK({
+  chainId: 8453, // Base mainnet
+  rpcUrl: "https://mainnet.base.org",
+  walletClient,
+  auctionAddress: "0xYourTokenAuctionDeployment",
+});
+```
+
+Without it, constructing on a chain that has no built-in deployment throws.
+
 ## Create an auction
 
 The builder validates required fields and basic invariants (`startTime < endTime`,
@@ -120,13 +137,13 @@ Early buyers pay less; later buyers pay more.
 | Chain | Chain ID | Status |
 | --- | --- | --- |
 | Base Sepolia | `84532` | Deployed |
-| Base Mainnet | `8453` | Not yet deployed — the SDK throws on construction |
+| Base Mainnet | `8453` | No canonical deployment — pass `auctionAddress` to use your own |
 
 ## API
 
 | Member | Description |
 | --- | --- |
-| `new AuctionFlowSDK({ chainId, rpcUrl, walletClient? })` | Construct against a supported chain. Throws if the chain has no deployment. |
+| `new AuctionFlowSDK({ chainId, rpcUrl, walletClient?, auctionAddress? })` | Construct against a supported chain. `auctionAddress` overrides the built-in deployment; without it, a chain with no canonical deployment throws. |
 | `buildAuction()` | Returns an `AuctionBuilder` (fluent config builder). |
 | `createAuction(config)` | Send the `createAuction` transaction. Requires a wallet client. |
 | `buyTokens(auctionId, amount)` | Send the `buyTokens` transaction. Requires a wallet client. |

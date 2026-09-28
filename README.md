@@ -126,6 +126,7 @@ const sdk = new AuctionFlowSDK({
   chainId: 84532,
   rpcUrl: "https://sepolia.base.org",
   walletClient,
+  // auctionAddress: "0x..."  // to target your own deployment instead
 });
 
 // Build and create an auction
