@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "create-auction": "tsx create-auction.ts"
+    "create-auction": "tsx --env-file=.env create-auction.ts"
   },
   "dependencies": {
     "auctionflow-sdk": "workspace:../sdk",

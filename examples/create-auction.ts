@@ -67,11 +67,19 @@ async function main() {
   const receipt = await sdk.publicClient.waitForTransactionReceipt({ hash });
   console.log("\nMined in block:", receipt.blockNumber);
 
-  // Auction ID is 0-indexed — first auction is 0
-  const spotPrice = await sdk.getSpotPrice(0n);
-  console.log("Current spot price (auction 0):", spotPrice.toString(), "USDC units");
+  // Read the id back rather than assuming 0 — the contract may already hold auctions.
+  const auctionId =
+    (await sdk.publicClient.readContract({
+      address: sdk.auctionAddress,
+      abi: [{ type: "function", name: "auctionCount", inputs: [], outputs: [{ type: "uint256" }], stateMutability: "view" }] as const,
+      functionName: "auctionCount",
+    })) - 1n;
+  console.log("Auction ID:", auctionId.toString());
 
-  const quote = await sdk.getQuote(0n, parseUnits("1000", 18));
+  const spotPrice = await sdk.getSpotPrice(auctionId);
+  console.log("Spot price:", spotPrice.toString(), "USDC units (", Number(spotPrice)/1e6, "USDC )");
+
+  const quote = await sdk.getQuote(auctionId, parseUnits("1000", 18));
   console.log("\nQuote for buying 1,000 tokens:");
   console.log("  Cost:       ", quote.cost.toString(), "USDC units");
   console.log("  Protocol fee:", quote.fee.toString(), "USDC units");
