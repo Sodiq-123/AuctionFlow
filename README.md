@@ -33,6 +33,59 @@ An open-source token price discovery & indexing platform — a TypeScript SDK, P
 
 ---
 
+## Live on Base Sepolia
+
+One complete auction lifecycle, run against the deployed contract and picked up by the indexer.
+
+| Step | What happened | Transaction |
+| --- | --- | --- |
+| Create | Auction 0 for a new DEMO token, starting at 0.01 USDC per token, capped at 10.5 USDC raised | [`0xf26e98…`](https://sepolia.basescan.org/tx/0xf26e980fb4d0db82bd2ed11fbf92449c5ee07ae524b486b67a6dd89d72d24ef7) |
+| Approve | Allow the contract to pull 10.7625 USDC | [`0x6af278…`](https://sepolia.basescan.org/tx/0x6af278aeb57281a3f7874c886423872fe61b3e46024583e0bfac8de13574e52d) |
+| Buy | 1,000 DEMO for 10.5 USDC plus a 0.2625 USDC fee. The purchase reaches the cap, so the auction completes in the same transaction | [`0x5020c5…`](https://sepolia.basescan.org/tx/0x5020c58e408da33a31f25bf03d7514ded5a8fdb86db3b8efb688308769d4c933) |
+| Withdraw | The creator claims the 10.5 USDC raised | [`0xf964b9…`](https://sepolia.basescan.org/tx/0xf964b9d75bf81f7524a4a2860aa7746f65eff18984d15f4ff60d895fe0c31385) |
+
+The indexer turned those events into queryable data:
+
+```graphql
+{
+  auctions {
+    items { id state totalRaised totalSold currentPrice proceedsWithdrawn }
+  }
+  priceSnapshots(where: { auctionId: "0" }, orderBy: "blockNumber", orderDirection: "asc") {
+    items { blockNumber price totalSold }
+  }
+}
+```
+
+```json
+{
+  "data": {
+    "auctions": {
+      "items": [
+        {
+          "id": "0",
+          "state": "COMPLETED",
+          "totalRaised": "10500000",
+          "totalSold": "1000000000000000000000",
+          "currentPrice": "11000",
+          "proceedsWithdrawn": true
+        }
+      ]
+    },
+    "priceSnapshots": {
+      "items": [
+        { "blockNumber": "47425259", "price": "10000", "totalSold": "0" },
+        { "blockNumber": "47425562", "price": "11000", "totalSold": "1000000000000000000000" }
+      ]
+    }
+  }
+}
+```
+
+Amounts are in base units: USDC has 6 decimals and DEMO has 18. So `totalRaised` is 10.5 USDC, `totalSold` is 1,000 DEMO, and the price moved from 0.01 to 0.011 USDC along the bonding curve. Large integers come back as strings because GraphQL's `Int` type is limited to 32 bits.
+
+---
+
 ## Packages
 
 | Package | Description |
