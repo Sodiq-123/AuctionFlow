@@ -6,6 +6,13 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 contract AuctionToken is ERC20, Ownable {
     uint256 public maxSupply;
 
+    /// @notice False until the auction migrates liquidity to Uniswap. While
+    ///         false, tokens can be minted but not moved, so no holder can
+    ///         seed or price the Uniswap pool before the auction does.
+    bool public transfersEnabled;
+
+    event TransfersEnabled();
+
     constructor(
         string memory name_,
         string memory symbol_,
@@ -18,5 +25,22 @@ contract AuctionToken is ERC20, Ownable {
     function mint(address to, uint256 amount) external onlyOwner {
         require(totalSupply() + amount <= maxSupply, "Exceeds max supply");
         _mint(to, amount);
+    }
+
+    /// @notice Permanently unlock transfers. Called by the auction contract
+    ///         as part of migration.
+    function enableTransfers() external onlyOwner {
+        require(!transfersEnabled, "Already enabled");
+        transfersEnabled = true;
+        emit TransfersEnabled();
+    }
+
+    /// @dev Mints (from == 0) and burns (to == 0) are always allowed; ordinary
+    ///      transfers wait for migration.
+    function _update(address from, address to, uint256 value) internal override {
+        if (from != address(0) && to != address(0)) {
+            require(transfersEnabled, "Transfers locked");
+        }
+        super._update(from, to, value);
     }
 }

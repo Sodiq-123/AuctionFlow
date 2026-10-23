@@ -17,6 +17,11 @@ export interface AuctionConfig {
   maxRaise: bigint;
   startTime: bigint;
   endTime: bigint;
+  /**
+   * Share of the raise seeded into Uniswap at migration, in basis points
+   * (2000..10000). Defaults to 5000 (50%).
+   */
+  liquidityBps?: bigint;
 }
 
 export interface AuctionData {
@@ -33,13 +38,18 @@ export interface AuctionData {
   totalRaised: bigint;
   totalSold: bigint;
   protocolFeeBps: bigint;
+  liquidityBps: bigint;
 }
 
 export interface BuyQuote {
+  /** Tokens the purchase would actually deliver: less than requested if it fills the auction. */
+  amount: bigint;
   cost: bigint;
   fee: bigint;
   totalCost: bigint;
   spotPriceAfter: bigint;
+  /** True if this purchase reaches the cap and closes the auction. */
+  fillsAuction: boolean;
 }
 
 export interface TransactionResult {

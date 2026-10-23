@@ -39,9 +39,18 @@ contract TokenAuctionWithdrawTest is Test {
         endTime = block.timestamp + 72 hours;
         vm.prank(creator);
         id = auction.createAuction(
-            "TestToken", "TT", 1_000_000_000e18,
-            address(usdc), BASE_PRICE, SLOPE, maxRaise,
-            startTime, endTime
+            TokenAuction.AuctionParams({
+                name: "TestToken",
+                symbol: "TT",
+                maxSupply: 1_000_000_000e18,
+                paymentToken: address(usdc),
+                basePrice: BASE_PRICE,
+                slope: SLOPE,
+                maxRaise: maxRaise,
+                startTime: startTime,
+                endTime: endTime,
+                liquidityBps: 5_000
+            })
         );
         vm.warp(startTime);
     }
@@ -152,9 +161,18 @@ contract TokenAuctionWithdrawTest is Test {
         uint256 laterStart = block.timestamp + 1;
         vm.prank(creator);
         uint256 second = auction.createAuction(
-            "Second", "SEC", 1_000_000_000e18,
-            address(usdc), BASE_PRICE, SLOPE, MAX_RAISE,
-            laterStart, block.timestamp + 72 hours
+            TokenAuction.AuctionParams({
+                name: "Second",
+                symbol: "SEC",
+                maxSupply: 1_000_000_000e18,
+                paymentToken: address(usdc),
+                basePrice: BASE_PRICE,
+                slope: SLOPE,
+                maxRaise: MAX_RAISE,
+                startTime: laterStart,
+                endTime: block.timestamp + 72 hours,
+                liquidityBps: 5_000
+            })
         );
         vm.warp(laterStart);
         _buy(second, 500e18);

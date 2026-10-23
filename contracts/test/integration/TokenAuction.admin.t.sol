@@ -56,9 +56,18 @@ contract TokenAuctionAdminTest is Test {
         endTime = block.timestamp + 72 hours;
         vm.prank(creator);
         id = auction.createAuction(
-            "TestToken", "TT", 1_000_000_000e18,
-            paymentToken, BASE_PRICE, SLOPE, maxRaise,
-            startTime, endTime
+            TokenAuction.AuctionParams({
+                name: "TestToken",
+                symbol: "TT",
+                maxSupply: 1_000_000_000e18,
+                paymentToken: paymentToken,
+                basePrice: BASE_PRICE,
+                slope: SLOPE,
+                maxRaise: maxRaise,
+                startTime: startTime,
+                endTime: endTime,
+                liquidityBps: 5_000
+            })
         );
         vm.warp(startTime);
     }

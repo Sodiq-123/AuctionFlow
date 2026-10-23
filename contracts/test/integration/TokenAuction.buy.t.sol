@@ -40,11 +40,18 @@ contract TokenAuctionBuyTest is Test {
         endTime = block.timestamp + 72 hours;
         vm.prank(creator);
         id = auction.createAuction(
-            "TestToken", "TT", 1_000_000_000e18,
-            address(usdc),
-            BASE_PRICE, SLOPE,
-            maxRaise,
-            startTime, endTime
+            TokenAuction.AuctionParams({
+                name: "TestToken",
+                symbol: "TT",
+                maxSupply: 1_000_000_000e18,
+                paymentToken: address(usdc),
+                basePrice: BASE_PRICE,
+                slope: SLOPE,
+                maxRaise: maxRaise,
+                startTime: startTime,
+                endTime: endTime,
+                liquidityBps: 5_000
+            })
         );
         vm.warp(startTime);
     }
@@ -124,9 +131,18 @@ contract TokenAuctionBuyTest is Test {
     function test_buyTokens_revertsBeforeStart() public {
         vm.prank(creator);
         uint256 id = auction.createAuction(
-            "TestToken", "TT", 1_000_000_000e18,
-            address(usdc), BASE_PRICE, SLOPE, MAX_RAISE,
-            block.timestamp + 1 hours, block.timestamp + 72 hours
+            TokenAuction.AuctionParams({
+                name: "TestToken",
+                symbol: "TT",
+                maxSupply: 1_000_000_000e18,
+                paymentToken: address(usdc),
+                basePrice: BASE_PRICE,
+                slope: SLOPE,
+                maxRaise: MAX_RAISE,
+                startTime: block.timestamp + 1 hours,
+                endTime: block.timestamp + 72 hours,
+                liquidityBps: 5_000
+            })
         );
         // no warp — still before startTime
         vm.startPrank(buyer);
@@ -146,14 +162,37 @@ contract TokenAuctionBuyTest is Test {
         vm.stopPrank();
     }
 
-    function test_buyTokens_revertsWhenExceedsMaxRaise() public {
-        // Tiny max raise so a modest buy blows past it.
-        uint256 id = _createAuction(1e6);
-        uint256 amount = 1_000e18; // cost ~ 1.0005e9 >> 1e6
+    /// A purchase that would overshoot the cap is filled with what the
+    /// remaining budget buys, and closes the auction.
+    function test_buyTokens_partiallyFillsAtCap() public {
+        uint256 cap = 1e6; // 1 USDC: less than 1,000 tokens cost
+        uint256 id = _createAuction(cap);
+        uint256 requested = 1_000e18;
+        uint256 fullCost = BondingCurve.calculateBuyCost(0, requested, BASE_PRICE, SLOPE);
+        assertGt(fullCost, cap, "precondition: request overshoots the cap");
+
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
-        vm.expectRevert("Exceeds max raise");
-        auction.buyTokens(id, amount, type(uint256).max);
+        auction.buyTokens(id, requested, type(uint256).max);
+        vm.stopPrank();
+
+        uint256 received = _token(id).balanceOf(buyer);
+        (uint256 raised, uint256 sold) = _totals(id);
+        assertGt(received, 0, "something was filled");
+        assertLt(received, requested, "less than requested");
+        assertEq(sold, received);
+        assertLe(raised, cap, "never exceeds the cap");
+        assertEq(raised, BondingCurve.calculateBuyCost(0, received, BASE_PRICE, SLOPE), "charged for what was filled");
+        assertEq(uint256(_state(id)), uint256(TokenAuction.AuctionState.COMPLETED), "fill-up closes the auction");
+    }
+
+    /// The buyer's maxCost still applies to the partial fill.
+    function test_buyTokens_partialFillRespectsMaxCost() public {
+        uint256 id = _createAuction(1e6);
+        vm.startPrank(buyer);
+        usdc.approve(address(auction), type(uint256).max);
+        vm.expectRevert("Slippage exceeded");
+        auction.buyTokens(id, 1_000e18, 1); // a partial fill still costs far more than 1 unit
         vm.stopPrank();
     }
 

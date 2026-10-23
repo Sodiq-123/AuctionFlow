@@ -21,7 +21,7 @@ contract BuyHandler is Test {
 
     address[] public actors;
     address public owner;
-    uint256 public ghostSold;    // sum of amounts from every successful buy
+    uint256 public ghostSold;    // tokens buyers actually received
     uint256 public ghostDonated; // payment tokens sent to the auction directly
     uint256 public ghostSwept;   // payment tokens the owner recovered
 
@@ -44,9 +44,14 @@ contract BuyHandler is Test {
         address actor = actors[actorSeed % actors.length];
         amount = bound(amount, 1e15, 1e21); // 0.001 .. 1,000 tokens
 
+        // Count what the buyer actually received, from their own balance, so
+        // the tally stays independent of the contract's accounting. A
+        // purchase that fills the auction may deliver less than requested.
+        (TokenAuction.AuctionConfig memory cfg,,,) = auction.auctions(auctionId);
+        uint256 before = cfg.token.balanceOf(actor);
         vm.prank(actor);
         try auction.buyTokens(auctionId, amount, type(uint256).max) {
-            ghostSold += amount;
+            ghostSold += cfg.token.balanceOf(actor) - before;
         } catch {
             // Expected reverts (exceeds max raise, auction completed) are fine —
             // the invariants must still hold whether or not a buy succeeds.
@@ -96,9 +101,18 @@ contract TokenAuctionInvariantTest is Test {
         uint256 startTime = block.timestamp + 1;
         vm.prank(creator);
         auctionId = auction.createAuction(
-            "TestToken", "TT", MAX_SUPPLY,
-            address(usdc), BASE_PRICE, SLOPE, MAX_RAISE,
-            startTime, block.timestamp + 3650 days
+            TokenAuction.AuctionParams({
+                name: "TestToken",
+                symbol: "TT",
+                maxSupply: MAX_SUPPLY,
+                paymentToken: address(usdc),
+                basePrice: BASE_PRICE,
+                slope: SLOPE,
+                maxRaise: MAX_RAISE,
+                startTime: startTime,
+                endTime: block.timestamp + 3650 days,
+                liquidityBps: 5_000
+            })
         );
         vm.warp(startTime);
 

@@ -11,7 +11,7 @@ ponder.on("TokenAuction:AuctionCreated", async ({ event, context }) => {
   const { db } = context;
   const {
     auctionId, creator, token, paymentToken,
-    basePrice, slope, maxRaise, startTime, endTime,
+    basePrice, slope, maxRaise, startTime, endTime, liquidityBps,
   } = event.args;
 
   const id = auctionId.toString();
@@ -27,6 +27,7 @@ ponder.on("TokenAuction:AuctionCreated", async ({ event, context }) => {
     maxRaise,
     startTime,
     endTime,
+    liquidityBps,
     state: "ACTIVE",
     totalRaised: 0n,
     totalSold: 0n,

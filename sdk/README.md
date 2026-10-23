@@ -56,7 +56,8 @@ Without it, constructing on a chain that has no built-in deployment throws.
 ## Create an auction
 
 The builder validates required fields and basic invariants (`startTime < endTime`,
-positive `basePrice` / `maxSupply` / `maxRaise`) before producing a config.
+positive `basePrice` / `maxSupply` / `maxRaise`, a liquidity share between 20% and
+100%) before producing a config.
 
 ```typescript
 const config = sdk
@@ -68,6 +69,7 @@ const config = sdk
     parseUnits("0.000001", 6) // slope
   )
   .withMaxRaise(parseUnits("50000", 6))
+  .withLiquidity(5_000) // 50% of the raise seeds the Uniswap pool (the default)
   .withSchedule(
     BigInt(Math.floor(Date.now() / 1000) + 3600),
     BigInt(Math.floor(Date.now() / 1000) + 3600 * 72)
@@ -76,6 +78,14 @@ const config = sdk
 
 const hash = await sdk.createAuction(config);
 ```
+
+`withLiquidity` sets the share of the raise, in basis points, that is paired
+with newly minted tokens to open a Uniswap pool when the auction ends; the
+creator receives the rest. The token supply must leave room for those tokens on
+top of a sold-out sale, so the contract rejects a `maxSupply` that is too small.
+
+Auction tokens can't be transferred until the auction migrates. That stops any
+holder from creating or pricing the Uniswap pool ahead of the auction.
 
 ## Buy tokens
 
@@ -93,6 +103,11 @@ set the bound yourself:
 await sdk.buyTokens(0n, amount, { slippageBps: 50 });        // 0.5% tolerance
 await sdk.buyTokens(0n, amount, { maxCost: 11_000_000n });   // exact bound, in USDC units
 ```
+
+A purchase that would take the auction past its `maxRaise` is filled with what
+the remaining budget buys, and closes the auction. `getQuote` reports this up
+front: `quote.amount` is what you'll actually receive and `quote.fillsAuction`
+says whether your purchase completes the sale.
 
 ## Read state & quotes
 
@@ -160,7 +175,7 @@ Early buyers pay less; later buyers pay more.
 | `buyTokens(auctionId, amount, { maxCost?, slippageBps? })` | Send the `buyTokens` transaction with a maximum total cost; reverts if the price moved past it. Defaults to the quote plus 1%. Requires a wallet client. |
 | `getAuction(auctionId)` | Read the full auction struct. |
 | `getSpotPrice(auctionId)` | Read the current on-chain spot price. |
-| `getQuote(auctionId, amount)` | Off-chain cost + fee + post-trade spot price. |
+| `getQuote(auctionId, amount)` | Tokens actually filled, cost, fee, post-trade spot price, and whether the purchase completes the auction. |
 | `applySlippage(total, slippageBps)` | The maximum cost `buyTokens` would send for a quoted total. |
 | `withdrawProceeds(auctionId)` | Pay a completed auction's `totalRaised` to its creator. Creator-only, once. Requires a wallet client. |
 | `hasWithdrawnProceeds(auctionId)` | Whether the creator has already claimed the proceeds. |

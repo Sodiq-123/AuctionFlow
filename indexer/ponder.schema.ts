@@ -9,6 +9,7 @@ export const auction = onchainTable("auction", (t) => ({
   basePrice: t.bigint().notNull(),
   slope: t.bigint().notNull(),
   maxRaise: t.bigint().notNull(),
+  liquidityBps: t.bigint().notNull(),
   startTime: t.bigint().notNull(),
   endTime: t.bigint().notNull(),
   state: t.text().notNull(),

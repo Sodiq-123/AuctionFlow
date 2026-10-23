@@ -58,4 +58,55 @@ contract AuctionTokenTest is Test {
         token.mint(alice, amount);
         assertLe(token.totalSupply(), MAX_SUPPLY);
     }
+
+    // --- transfer lock -------------------------------------------------------
+
+    function test_transfers_lockedByDefault() public {
+        vm.prank(owner);
+        token.mint(alice, 100e18);
+        assertFalse(token.transfersEnabled());
+
+        vm.prank(alice);
+        vm.expectRevert("Transfers locked");
+        token.transfer(owner, 1e18);
+    }
+
+    function test_transferFrom_lockedByDefault() public {
+        vm.prank(owner);
+        token.mint(alice, 100e18);
+        vm.prank(alice);
+        token.approve(owner, 1e18); // approvals are allowed; moving tokens is not
+
+        vm.prank(owner);
+        vm.expectRevert("Transfers locked");
+        token.transferFrom(alice, owner, 1e18);
+    }
+
+    function test_enableTransfers_unlocksTransfers() public {
+        vm.prank(owner);
+        token.mint(alice, 100e18);
+
+        vm.expectEmit(false, false, false, false);
+        emit AuctionToken.TransfersEnabled();
+        vm.prank(owner);
+        token.enableTransfers();
+
+        vm.prank(alice);
+        token.transfer(owner, 40e18);
+        assertEq(token.balanceOf(owner), 40e18);
+    }
+
+    function test_enableTransfers_onlyOwner() public {
+        vm.prank(alice);
+        vm.expectRevert(); // Ownable: caller is not the owner
+        token.enableTransfers();
+    }
+
+    function test_enableTransfers_onlyOnce() public {
+        vm.startPrank(owner);
+        token.enableTransfers();
+        vm.expectRevert("Already enabled");
+        token.enableTransfers();
+        vm.stopPrank();
+    }
 }

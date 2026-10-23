@@ -41,6 +41,21 @@ describe("AuctionBuilder", () => {
     );
   });
 
+  it("defaults the liquidity share to 50%", () => {
+    expect(validBuilder().build().liquidityBps).toBe(5_000n);
+  });
+
+  it("accepts a liquidity share between 20% and 100%", () => {
+    expect(validBuilder().withLiquidity(2_000).build().liquidityBps).toBe(2_000n);
+    expect(validBuilder().withLiquidity(10_000).build().liquidityBps).toBe(10_000n);
+  });
+
+  it("rejects a liquidity share outside 20%..100%", () => {
+    expect(() => validBuilder().withLiquidity(1_999).build()).toThrow(/liquidityBps/);
+    expect(() => validBuilder().withLiquidity(10_001).build()).toThrow(/liquidityBps/);
+    expect(() => validBuilder().withLiquidity(12.5)).toThrow(/integer/);
+  });
+
   it("rejects a non-positive basePrice", () => {
     expect(() => validBuilder().withBondingCurve(0n, 1_000n).build()).toThrow(
       /basePrice must be greater than 0/

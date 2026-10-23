@@ -21,16 +21,19 @@ library BondingCurve {
     /// @param amount Tokens to buy, in token wei
     /// @param basePrice Price of the first whole token, in payment-token units
     /// @param slope Price increase per whole token sold, in payment-token units
-    /// @return Cost in payment-token units
+    /// @return Cost in payment-token units, rounded up
     function calculateBuyCost(
         uint256 currentSupply,
         uint256 amount,
         uint256 basePrice,
         uint256 slope
     ) internal pure returns (uint256) {
-        uint256 linearCost = (basePrice * amount) / TOKEN_SCALE;
-        uint256 curveCost =
-            (slope * amount * (2 * currentSupply + amount)) / (2 * TOKEN_SCALE * TOKEN_SCALE);
+        // Both terms round up, so every purchase pays at least the exact
+        // price. Rounding down would let a sliver of a token cost nothing.
+        uint256 linearCost = Math.ceilDiv(basePrice * amount, TOKEN_SCALE);
+        uint256 curveCost = Math.ceilDiv(
+            slope * amount * (2 * currentSupply + amount), 2 * TOKEN_SCALE * TOKEN_SCALE
+        );
         return linearCost + curveCost;
     }
 
@@ -43,5 +46,35 @@ library BondingCurve {
         uint256 slope
     ) internal pure returns (uint256) {
         return basePrice + (slope * currentSupply) / TOKEN_SCALE;
+    }
+
+    /// @notice Largest amount (token wei) that can be bought from
+    ///         `currentSupply` for at most `budget` payment-token units.
+    /// @dev    Binary search over calculateBuyCost rather than the closed-form
+    ///         root of the quadratic: the closed form squares terms that can
+    ///         exceed uint256 for realistic parameters, while the search only
+    ///         ever evaluates the cost function. `upperBound` caps the result,
+    ///         e.g. at the remaining token supply. ~90 iterations at most.
+    function maxBuyable(
+        uint256 currentSupply,
+        uint256 budget,
+        uint256 basePrice,
+        uint256 slope,
+        uint256 upperBound
+    ) internal pure returns (uint256) {
+        // Price never falls below basePrice, so this many tokens is always
+        // enough to exhaust the budget.
+        uint256 hi = (budget * TOKEN_SCALE) / basePrice + 1;
+        if (hi > upperBound) hi = upperBound;
+        uint256 lo = 0;
+        while (lo < hi) {
+            uint256 mid = (lo + hi + 1) / 2;
+            if (calculateBuyCost(currentSupply, mid, basePrice, slope) <= budget) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        return lo;
     }
 }

@@ -11,8 +11,9 @@ import {
 import { AuctionBuilder } from "./builders/auction-builder";
 import { AuctionConfig, AuctionData, BuyQuote, SupportedChainId } from "./types";
 import { AUCTION_ADDRESSES } from "./constants/addresses";
+import { DEFAULT_LIQUIDITY_BPS } from "./constants/protocol";
 import { tokenAuctionAbi } from "./abis/token-auction";
-import { applySlippage, calculateBuyQuote, DEFAULT_SLIPPAGE_BPS } from "./utils/bonding-curve";
+import { applySlippage, DEFAULT_SLIPPAGE_BPS, fillPurchase, spotPrice } from "./utils/bonding-curve";
 import { CHAINS } from "./utils/chains";
 
 /** Shape of the nested tuple returned by the on-chain `auctions(id)` getter. */
@@ -27,6 +28,7 @@ interface RawAuction {
     endTime: bigint;
     creator: Address;
     protocolFeeBps: bigint;
+    liquidityBps: bigint;
   };
   state: number;
   totalRaised: bigint;
@@ -90,15 +92,18 @@ export class AuctionFlowSDK {
       abi: tokenAuctionAbi,
       functionName: "createAuction",
       args: [
-        config.name,
-        config.symbol,
-        config.maxSupply,
-        config.paymentToken,
-        config.basePrice,
-        config.slope,
-        config.maxRaise,
-        config.startTime,
-        config.endTime,
+        {
+          name: config.name,
+          symbol: config.symbol,
+          maxSupply: config.maxSupply,
+          paymentToken: config.paymentToken,
+          basePrice: config.basePrice,
+          slope: config.slope,
+          maxRaise: config.maxRaise,
+          startTime: config.startTime,
+          endTime: config.endTime,
+          liquidityBps: config.liquidityBps ?? BigInt(DEFAULT_LIQUIDITY_BPS),
+        },
       ],
     });
 
@@ -184,19 +189,23 @@ export class AuctionFlowSDK {
   // Read: Get buy quote (off-chain calculation)
   async getQuote(auctionId: bigint, amount: bigint): Promise<BuyQuote> {
     const auction = await this.getAuction(auctionId);
-    const quote = calculateBuyQuote(
+    const fill = fillPurchase(
       auction.totalSold,
       amount,
       auction.basePrice,
       auction.slope,
-      auction.protocolFeeBps
+      auction.totalRaised,
+      auction.maxRaise
     );
+    const fee = (fill.cost * auction.protocolFeeBps) / 10_000n;
 
     return {
-      cost: quote.cost,
-      fee: quote.fee,
-      totalCost: quote.total,
-      spotPriceAfter: quote.spotPriceAfter,
+      amount: fill.amount,
+      cost: fill.cost,
+      fee,
+      totalCost: fill.cost + fee,
+      spotPriceAfter: spotPrice(auction.totalSold + fill.amount, auction.basePrice, auction.slope),
+      fillsAuction: fill.fillsAuction,
     };
   }
 
@@ -226,6 +235,7 @@ export class AuctionFlowSDK {
       totalRaised: raw.totalRaised,
       totalSold: raw.totalSold,
       protocolFeeBps: raw.config.protocolFeeBps,
+      liquidityBps: raw.config.liquidityBps,
     };
   }
 }
