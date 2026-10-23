@@ -19,11 +19,19 @@ jobs:
         with:
           submodules: recursive
 
+      # Caches ~/.foundry/cache, including RPC responses. The fork tests pin a
+      # block, so after the first run almost every read comes from the cache.
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
+      # The fork tests in test/fork run against real Uniswap v3 on a Base
+      # mainnet fork. They skip when BASE_RPC_URL is empty, which is the case
+      # when the secret isn't set and on pull requests from forks, which never
+      # receive secrets.
       - name: Run tests
         working-directory: contracts
+        env:
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
         run: forge test -vvv
 
       - name: Check gas snapshots
