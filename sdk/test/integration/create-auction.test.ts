@@ -117,7 +117,7 @@ describe("AuctionFlowSDK construction", () => {
     });
     expect(sdk.chainId).toBe(84532);
     expect(sdk.auctionAddress).toBe(
-      "0x91519ca6c0b7a0e116a590c89a095199ff9f0054"
+      "0x722f4521b96aca1df7c65a1dbe3b1713803ccea9"
     );
   });
 });

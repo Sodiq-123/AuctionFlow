@@ -29,13 +29,13 @@ An open-source token price discovery & indexing platform — a TypeScript SDK, P
                Base + Base Sepolia
 ```
 
-**Deployed contract (Base Sepolia):** [`0x91519Ca6C0B7a0E116A590C89A095199FF9f0054`](https://sepolia.basescan.org/address/0x91519Ca6C0B7a0E116A590C89A095199FF9f0054)
+**Deployed contract (Base Sepolia):** [`0x722F4521b96acA1df7C65a1DbE3B1713803ccEa9`](https://sepolia.basescan.org/address/0x722F4521b96acA1df7C65a1DbE3B1713803ccEa9)
 
 ---
 
 ## Live on Base Sepolia
 
-One complete auction lifecycle, run against the deployed contract and picked up by the indexer.
+One complete auction lifecycle, picked up by the indexer. It ran on the [previous deployment](https://sepolia.basescan.org/address/0x91519Ca6C0B7a0E116A590C89A095199FF9f0054), which predates migration to Uniswap.
 
 | Step | What happened | Transaction |
 | --- | --- | --- |

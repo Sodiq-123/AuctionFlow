@@ -27,8 +27,8 @@ export default createConfig({
       abi: TokenAuctionAbi.abi,
       chain: {
         baseSepolia: {
-          address: "0x91519ca6c0b7a0e116a590c89a095199ff9f0054",
-          startBlock: 47424271,
+          address: "0x722f4521b96aca1df7c65a1dbe3b1713803ccea9",
+          startBlock: 49300810,
         },
         base: {
           address: (process.env.TOKEN_AUCTION_BASE_ADDRESS ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
