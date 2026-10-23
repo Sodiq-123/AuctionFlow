@@ -28,6 +28,13 @@ jobs:
       # mainnet fork. They skip when BASE_RPC_URL is empty, which is the case
       # when the secret isn't set and on pull requests from forks, which never
       # receive secrets.
+      # The test runner doesn't enforce the EIP-170 contract size limit, so a
+      # contract can pass every test and still be undeployable. This step
+      # fails if any production contract is over the limit.
+      - name: Check contract sizes
+        working-directory: contracts
+        run: forge build --sizes --skip test --skip script
+
       - name: Run tests
         working-directory: contracts
         env:

@@ -4,6 +4,11 @@ out = "out"
 libs = ["lib"]
 solc = "0.8.24"
 evm_version = "cancun"
+# Without the optimizer TokenAuction exceeds the 24,576-byte contract size
+# limit (EIP-170) and cannot be deployed. 200 runs is the usual balance
+# between deployment size and gas per call.
+optimizer = true
+optimizer_runs = 200
 
 [rpc_endpoints]
 base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
