@@ -7,8 +7,9 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
+import "./interfaces/IUniswapV3.sol";
 
-contract TokenAuction is ReentrancyGuard, Ownable {
+contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     using SafeERC20 for IERC20;
 
     enum AuctionState { PENDING, ACTIVE, COMPLETED, MIGRATED }
@@ -24,6 +25,7 @@ contract TokenAuction is ReentrancyGuard, Ownable {
         address creator;              // Token creator address
         uint256 protocolFeeBps;       // Protocol fee in basis points (e.g., 250 = 2.5%)
         uint256 liquidityBps;         // Share of the raise seeded into Uniswap at migration
+        uint256 lpFeeShareBps;        // Protocol's share of the pool's trading fees
     }
 
     /// @notice Everything a creator chooses when launching an auction.
@@ -72,6 +74,33 @@ contract TokenAuction is ReentrancyGuard, Ownable {
     ///         directly) and can be recovered with `sweep`.
     mapping(address => uint256) public custodied;
 
+    // Uniswap v3
+    /// @notice Pool fee tier for migrated liquidity: 1%, the usual tier for
+    ///         newly launched, volatile tokens.
+    uint24 public constant POOL_FEE = 10000;
+    /// @dev Full-range bounds for the 1% tier (tick spacing 200), i.e.
+    ///      TickMath's MIN/MAX_TICK rounded inward to a multiple of 200.
+    int24 internal constant MIN_USABLE_TICK = -887200;
+    int24 internal constant MAX_USABLE_TICK = 887200;
+    uint160 internal constant MIN_SQRT_RATIO = 4295128739;
+    uint160 internal constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
+
+    INonfungiblePositionManager public immutable positionManager;
+
+    /// @notice Upper bound on the protocol's share of trading fees, so a
+    ///         creator always keeps at least half.
+    uint256 public constant MAX_LP_FEE_SHARE_BPS = 5000;
+    uint256 public defaultLpFeeShareBps;
+
+    /// @notice The Uniswap position NFT holding each auction's liquidity. This
+    ///         contract keeps it forever, so the liquidity is permanently locked.
+    mapping(uint256 => uint256) public positionId;
+    mapping(uint256 => address) public poolOf;
+
+    /// @dev Set only for the duration of a price-correction swap, so the swap
+    ///      callback can be authenticated.
+    address private _activePool;
+
     // Events — these are what the indexer will listen to
     event AuctionCreated(
         uint256 indexed auctionId,
@@ -97,14 +126,32 @@ contract TokenAuction is ReentrancyGuard, Ownable {
     );
 
     event AuctionCompleted(uint256 indexed auctionId, uint256 totalRaised, uint256 totalSold);
-    event AuctionMigrated(uint256 indexed auctionId, address liquidityPool);
+    event AuctionMigrated(
+        uint256 indexed auctionId,
+        address pool,
+        uint256 positionId,
+        uint256 tokenLiquidity,
+        uint256 paymentLiquidity
+    );
+    event LpFeesCollected(
+        uint256 indexed auctionId,
+        uint256 creatorTokenFees,
+        uint256 creatorPaymentFees,
+        uint256 protocolTokenFees,
+        uint256 protocolPaymentFees
+    );
     event ProceedsWithdrawn(uint256 indexed auctionId, address indexed creator, uint256 amount);
     event ProtocolFeeRecipientUpdated(address indexed previous, address indexed current);
     event DefaultFeeBpsUpdated(uint256 previous, uint256 current);
     event Swept(address indexed token, address indexed to, uint256 amount);
+    event DefaultLpFeeShareBpsUpdated(uint256 previous, uint256 current);
 
-    constructor(address feeRecipient_, uint256 defaultFeeBps_) Ownable(msg.sender) {
+    constructor(address feeRecipient_, uint256 defaultFeeBps_, INonfungiblePositionManager positionManager_)
+        Ownable(msg.sender)
+    {
         require(feeRecipient_ != address(0), "Zero fee recipient");
+        require(address(positionManager_) != address(0), "Zero position manager");
+        positionManager = positionManager_;
         require(defaultFeeBps_ <= MAX_FEE_BPS, "Fee too high");
         protocolFeeRecipient = feeRecipient_;
         defaultFeeBps = defaultFeeBps_;
@@ -134,6 +181,7 @@ contract TokenAuction is ReentrancyGuard, Ownable {
         config.creator = msg.sender;
         config.protocolFeeBps = defaultFeeBps;
         config.liquidityBps = p.liquidityBps;
+        config.lpFeeShareBps = defaultLpFeeShareBps;
         auction.state = AuctionState.ACTIVE;
 
         emit AuctionCreated(
@@ -272,16 +320,21 @@ contract TokenAuction is ReentrancyGuard, Ownable {
     }
 
     /// @notice Transfer an auction's raised payment tokens to its creator.
-    /// @dev Callable once, by the creator, after the auction reaches COMPLETED.
-    ///      Protocol fees are routed to the fee recipient at buy time, so the
-    ///      contract custodies exactly `totalRaised` for this auction.
+    /// @dev Callable once, by the creator, once the auction has completed,
+    ///      before or after migration. Pays the part of the raise not reserved
+    ///      for liquidity. Protocol fees are routed to the fee recipient at buy
+    ///      time, so the contract custodies exactly `totalRaised` per auction.
     function withdrawProceeds(uint256 auctionId) external nonReentrant {
         AuctionData storage auction = auctions[auctionId];
         require(msg.sender == auction.config.creator, "Not creator");
-        require(auction.state == AuctionState.COMPLETED, "Auction not completed");
+        require(
+            auction.state == AuctionState.COMPLETED || auction.state == AuctionState.MIGRATED,
+            "Auction not completed"
+        );
         require(!proceedsWithdrawn[auctionId], "Already withdrawn");
 
-        uint256 amount = auction.totalRaised;
+        // The rest of the raise is reserved for the Uniswap pool.
+        uint256 amount = auction.totalRaised - _liquidityShare(auction);
         require(amount > 0, "Nothing to withdraw");
 
         // Effects before interaction.
@@ -290,6 +343,203 @@ contract TokenAuction is ReentrancyGuard, Ownable {
         auction.config.paymentToken.safeTransfer(auction.config.creator, amount);
 
         emit ProceedsWithdrawn(auctionId, auction.config.creator, amount);
+    }
+
+    // --- Migration ----------------------------------------------------------
+
+    /// @dev Working state for a migration, bundled to keep the stack shallow.
+    struct Migration {
+        AuctionToken token;
+        IERC20 payment;
+        bool tokenIsToken0;
+        uint160 targetSqrtPrice;
+        uint256 paymentFloor;   // payment tokens held for everything except this migration
+        address pool;
+    }
+
+    /// @notice Move a completed auction's liquidity into Uniswap v3 and unlock
+    ///         its token. Anyone may call it, so a creator can never hold the
+    ///         token hostage by not migrating.
+    /// @dev    Opens (or corrects) the pool at the auction's final price, adds
+    ///         full-range liquidity from the reserved share of the raise plus
+    ///         newly minted tokens, and keeps the position NFT forever. Never
+    ///         leaves tokens permanently locked: if there is nothing to pair, or
+    ///         Uniswap rejects the position, transfers are unlocked anyway and
+    ///         the reserved funds go to the creator.
+    function migrate(uint256 auctionId) external nonReentrant {
+        AuctionData storage auction = auctions[auctionId];
+        require(auction.state == AuctionState.COMPLETED, "Auction not completed");
+
+        uint256 paymentBudget = _liquidityShare(auction);
+        uint256 price = BondingCurve.spotPrice(auction.totalSold, auction.config.basePrice, auction.config.slope);
+        uint256 tokenBudget = Math.mulDiv(paymentBudget, BondingCurve.TOKEN_SCALE, price);
+
+        Migration memory m;
+        m.token = auction.config.token;
+        m.payment = auction.config.paymentToken;
+        m.tokenIsToken0 = address(m.token) < address(m.payment);
+        m.paymentFloor = m.payment.balanceOf(address(this)) - paymentBudget;
+
+        // Effects before interactions.
+        auction.state = AuctionState.MIGRATED;
+        custodied[address(m.payment)] -= paymentBudget;
+
+        m.token.enableTransfers();
+
+        if (paymentBudget > 0 && tokenBudget > 0) {
+            m.token.mint(address(this), tokenBudget);
+            m.targetSqrtPrice = _sqrtPriceX96(price, m.tokenIsToken0);
+            (address t0, address t1) = _sorted(m);
+            m.pool = positionManager.createAndInitializePoolIfNecessary(t0, t1, POOL_FEE, m.targetSqrtPrice);
+            _correctPoolPrice(m, tokenBudget, paymentBudget);
+            _addLiquidity(auctionId, m);
+        }
+
+        // Anything Uniswap didn't take: burn tokens, return funds to the creator.
+        uint256 tokensLeft = m.token.balanceOf(address(this));
+        if (tokensLeft > 0) m.token.burn(tokensLeft);
+        uint256 paymentLeft = m.payment.balanceOf(address(this)) - m.paymentFloor;
+        if (paymentLeft > 0) m.payment.safeTransfer(auction.config.creator, paymentLeft);
+    }
+
+    /// @dev Mint the full-range position. A failure here must not strand the
+    ///      token, so it is caught and migration finishes without a pool.
+    function _addLiquidity(uint256 auctionId, Migration memory m) internal {
+        uint256 tokenAvail = m.token.balanceOf(address(this));
+        uint256 paymentAvail = m.payment.balanceOf(address(this)) - m.paymentFloor;
+        (address t0, address t1) = _sorted(m);
+
+        IERC20(address(m.token)).forceApprove(address(positionManager), tokenAvail);
+        m.payment.forceApprove(address(positionManager), paymentAvail);
+
+        // Minimums can be zero: _correctPoolPrice set the pool's price in this
+        // same transaction, so there is no window in which it can be moved.
+        try positionManager.mint(
+            INonfungiblePositionManager.MintParams({
+                token0: t0,
+                token1: t1,
+                fee: POOL_FEE,
+                tickLower: MIN_USABLE_TICK,
+                tickUpper: MAX_USABLE_TICK,
+                amount0Desired: m.tokenIsToken0 ? tokenAvail : paymentAvail,
+                amount1Desired: m.tokenIsToken0 ? paymentAvail : tokenAvail,
+                amount0Min: 0,
+                amount1Min: 0,
+                recipient: address(this),
+                deadline: block.timestamp
+            })
+        ) returns (uint256 tokenId, uint128, uint256 used0, uint256 used1) {
+            positionId[auctionId] = tokenId;
+            poolOf[auctionId] = m.pool;
+            emit AuctionMigrated(
+                auctionId, m.pool, tokenId,
+                m.tokenIsToken0 ? used0 : used1,
+                m.tokenIsToken0 ? used1 : used0
+            );
+        } catch {
+            emit AuctionMigrated(auctionId, address(0), 0, 0, 0);
+        }
+
+        IERC20(address(m.token)).forceApprove(address(positionManager), 0);
+        m.payment.forceApprove(address(positionManager), 0);
+    }
+
+    /// @dev Anyone can initialize a Uniswap pool for a known token address, at
+    ///      any price, so the pool may already exist at the wrong price. Move
+    ///      it to the target before adding liquidity.
+    ///
+    ///      Raising the token's price (buying it) is always free: tokens can't
+    ///      leave a holder before migration, so the pool cannot contain any,
+    ///      and a swap through empty ranges moves the price at no cost. That is
+    ///      the harmful case, since a pool below the auction price would sell
+    ///      the locked liquidity cheaply, so it is corrected exactly.
+    ///
+    ///      Lowering it means selling into someone's USDC-only position above
+    ///      the target, at prices above the target, which only costs them. We
+    ///      sell at most half the reserve, so the position can always still be
+    ///      minted; if the price remains high, the pool simply opens above the
+    ///      auction price.
+    function _correctPoolPrice(Migration memory m, uint256 tokenBudget, uint256 paymentBudget) internal {
+        IUniswapV3Pool pool = IUniswapV3Pool(m.pool);
+        (uint160 current,,,,,,) = pool.slot0();
+        if (current == m.targetSqrtPrice) return;
+
+        bool zeroForOne = current > m.targetSqrtPrice; // paying token0 lowers the price
+        bool sellsToken = zeroForOne == m.tokenIsToken0;
+        uint256 input = sellsToken ? tokenBudget / 2 : paymentBudget;
+        if (input == 0) return;
+
+        (address t0, address t1) = _sorted(m);
+        _activePool = address(pool);
+        pool.swap(address(this), zeroForOne, int256(input), m.targetSqrtPrice, abi.encode(t0, t1));
+        _activePool = address(0);
+
+        if (!sellsToken) {
+            (current,,,,,,) = pool.slot0();
+            require(current == m.targetSqrtPrice, "Pool price not corrected");
+        }
+    }
+
+    /// @inheritdoc IUniswapV3SwapCallback
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external override {
+        require(_activePool != address(0) && msg.sender == _activePool, "Unauthorized callback");
+        (address t0, address t1) = abi.decode(data, (address, address));
+        if (amount0Delta > 0) IERC20(t0).safeTransfer(msg.sender, uint256(amount0Delta));
+        if (amount1Delta > 0) IERC20(t1).safeTransfer(msg.sender, uint256(amount1Delta));
+    }
+
+    /// @notice Collect the migrated pool's trading fees: the protocol takes its
+    ///         share and the creator receives the rest. Anyone may trigger it.
+    function collectFees(uint256 auctionId) external nonReentrant returns (uint256 tokenFees, uint256 paymentFees) {
+        AuctionData storage auction = auctions[auctionId];
+        require(auction.state == AuctionState.MIGRATED && positionId[auctionId] != 0, "No position");
+
+        (uint256 a0, uint256 a1) = positionManager.collect(
+            INonfungiblePositionManager.CollectParams({
+                tokenId: positionId[auctionId],
+                recipient: address(this),
+                amount0Max: type(uint128).max,
+                amount1Max: type(uint128).max
+            })
+        );
+        bool tokenIsToken0 = address(auction.config.token) < address(auction.config.paymentToken);
+        (tokenFees, paymentFees) = tokenIsToken0 ? (a0, a1) : (a1, a0);
+
+        uint256 protocolToken = (tokenFees * auction.config.lpFeeShareBps) / 10000;
+        uint256 protocolPayment = (paymentFees * auction.config.lpFeeShareBps) / 10000;
+        _payOut(IERC20(address(auction.config.token)), auction.config.creator, protocolToken, tokenFees);
+        _payOut(auction.config.paymentToken, auction.config.creator, protocolPayment, paymentFees);
+
+        emit LpFeesCollected(
+            auctionId, tokenFees - protocolToken, paymentFees - protocolPayment, protocolToken, protocolPayment
+        );
+    }
+
+    function _payOut(IERC20 token, address creator, uint256 protocolShare, uint256 total) internal {
+        if (protocolShare > 0) token.safeTransfer(protocolFeeRecipient, protocolShare);
+        if (total > protocolShare) token.safeTransfer(creator, total - protocolShare);
+    }
+
+    function _liquidityShare(AuctionData storage auction) internal view returns (uint256) {
+        return (auction.totalRaised * auction.config.liquidityBps) / 10000;
+    }
+
+    function _sorted(Migration memory m) internal pure returns (address token0, address token1) {
+        return m.tokenIsToken0
+            ? (address(m.token), address(m.payment))
+            : (address(m.payment), address(m.token));
+    }
+
+    /// @dev Uniswap prices are token1 per token0 in raw units, as
+    ///      sqrt(price) * 2^96. `price` is payment-token units per whole token
+    ///      (1e18 token wei).
+    function _sqrtPriceX96(uint256 price, bool tokenIsToken0) internal pure returns (uint160) {
+        uint256 ratioX192 = tokenIsToken0
+            ? Math.mulDiv(price, 1 << 192, BondingCurve.TOKEN_SCALE)
+            : Math.mulDiv(BondingCurve.TOKEN_SCALE, 1 << 192, price);
+        uint256 sqrtPrice = Math.sqrt(ratioX192);
+        require(sqrtPrice > MIN_SQRT_RATIO && sqrtPrice < MAX_SQRT_RATIO, "Price outside Uniswap range");
+        return uint160(sqrtPrice);
     }
 
     /// @dev Whether the largest intermediate products the curve can compute
@@ -325,6 +575,15 @@ contract TokenAuction is ReentrancyGuard, Ownable {
         require(feeBps <= MAX_FEE_BPS, "Fee too high");
         emit DefaultFeeBpsUpdated(defaultFeeBps, feeBps);
         defaultFeeBps = feeBps;
+    }
+
+    /// @notice Change the protocol's share of trading fees for auctions created
+    ///         from now on. Existing auctions keep the share they were created
+    ///         with.
+    function setDefaultLpFeeShareBps(uint256 shareBps) external onlyOwner {
+        require(shareBps <= MAX_LP_FEE_SHARE_BPS, "Share too high");
+        emit DefaultLpFeeShareBpsUpdated(defaultLpFeeShareBps, shareBps);
+        defaultLpFeeShareBps = shareBps;
     }
 
     /// @notice Recover tokens held above what is owed to auction creators,

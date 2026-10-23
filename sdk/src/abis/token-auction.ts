@@ -11,6 +11,11 @@ export const tokenAuctionAbi = [
         "name": "defaultFeeBps_",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "positionManager_",
+        "type": "address",
+        "internalType": "contract INonfungiblePositionManager"
       }
     ],
     "stateMutability": "nonpayable"
@@ -30,6 +35,19 @@ export const tokenAuctionAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_LP_FEE_SHARE_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MIN_LIQUIDITY_BPS",
     "inputs": [],
     "outputs": [
@@ -37,6 +55,19 @@ export const tokenAuctionAbi = [
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "POOL_FEE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint24",
+        "internalType": "uint24"
       }
     ],
     "stateMutability": "view"
@@ -119,6 +150,11 @@ export const tokenAuctionAbi = [
             "name": "liquidityBps",
             "type": "uint256",
             "internalType": "uint256"
+          },
+          {
+            "name": "lpFeeShareBps",
+            "type": "uint256",
+            "internalType": "uint256"
           }
         ]
       },
@@ -161,6 +197,30 @@ export const tokenAuctionAbi = [
       }
     ],
     "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "collectFees",
+    "inputs": [
+      {
+        "name": "auctionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "tokenFees",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "paymentFees",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "stateMutability": "nonpayable"
   },
   {
@@ -281,6 +341,19 @@ export const tokenAuctionAbi = [
   },
   {
     "type": "function",
+    "name": "defaultLpFeeShareBps",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "getBuyCost",
     "inputs": [
       {
@@ -329,6 +402,19 @@ export const tokenAuctionAbi = [
   },
   {
     "type": "function",
+    "name": "migrate",
+    "inputs": [
+      {
+        "name": "auctionId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "owner",
     "inputs": [],
     "outputs": [
@@ -336,6 +422,57 @@ export const tokenAuctionAbi = [
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "poolOf",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "positionId",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "positionManager",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract INonfungiblePositionManager"
       }
     ],
     "stateMutability": "view"
@@ -394,6 +531,19 @@ export const tokenAuctionAbi = [
   },
   {
     "type": "function",
+    "name": "setDefaultLpFeeShareBps",
+    "inputs": [
+      {
+        "name": "shareBps",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setProtocolFeeRecipient",
     "inputs": [
       {
@@ -431,6 +581,29 @@ export const tokenAuctionAbi = [
         "name": "newOwner",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "uniswapV3SwapCallback",
+    "inputs": [
+      {
+        "name": "amount0Delta",
+        "type": "int256",
+        "internalType": "int256"
+      },
+      {
+        "name": "amount1Delta",
+        "type": "int256",
+        "internalType": "int256"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
       }
     ],
     "outputs": [],
@@ -576,10 +749,28 @@ export const tokenAuctionAbi = [
         "internalType": "uint256"
       },
       {
-        "name": "liquidityPool",
+        "name": "pool",
         "type": "address",
         "indexed": false,
         "internalType": "address"
+      },
+      {
+        "name": "positionId",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "tokenLiquidity",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "paymentLiquidity",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -596,6 +787,62 @@ export const tokenAuctionAbi = [
       },
       {
         "name": "current",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "DefaultLpFeeShareBpsUpdated",
+    "inputs": [
+      {
+        "name": "previous",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "current",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "LpFeesCollected",
+    "inputs": [
+      {
+        "name": "auctionId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "creatorTokenFees",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "creatorPaymentFees",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "protocolTokenFees",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "protocolPaymentFees",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"

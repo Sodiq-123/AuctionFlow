@@ -96,7 +96,7 @@ contract TokenAuctionInvariantTest is Test {
 
     function setUp() public {
         usdc = new MockUSDC();
-        auction = new TokenAuction(feeRecipient, 250);
+        auction = new TokenAuction(feeRecipient, 250, INonfungiblePositionManager(makeAddr("positionManager")));
 
         uint256 startTime = block.timestamp + 1;
         vm.prank(creator);

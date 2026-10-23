@@ -120,11 +120,18 @@ cd contracts && forge install
 
 Linear bonding curve price discovery. Price = `basePrice + slope × currentSupply`.
 
+An auction's life:
+
+1. **Sale.** Buyers purchase along the curve with a slippage bound (`maxCost`). The purchase that reaches `maxRaise` is partially filled and closes the sale. Tokens can't be transferred yet.
+2. **Migration.** Anyone calls `migrate`. A creator-chosen share of the raise (20–100%) is paired with newly minted tokens in a 1% Uniswap v3 pool at the auction's final price, and the position is locked in the contract forever. The token unlocks for trading.
+3. **Payouts.** The creator withdraws the rest of the raise, and collects the pool's trading fees minus the protocol's share.
+
 ```text
 contracts/src/
-├── AuctionToken.sol    ERC-20 with owner-controlled minting
-├── BondingCurve.sol    Pure math library (integral of linear curve)
-└── TokenAuction.sol    Main auction contract
+├── AuctionToken.sol             ERC-20 with capped minting and a transfer lock until migration
+├── BondingCurve.sol             Pure math library (integral of linear curve, rounded up)
+├── TokenAuction.sol             Main auction contract: sale, migration, payouts
+└── interfaces/IUniswapV3.sol    The Uniswap v3 calls migration needs
 ```
 
 ### Run tests
@@ -133,6 +140,8 @@ contracts/src/
 cd contracts
 forge test -vvv
 ```
+
+The migration tests in `test/fork/` run against real Uniswap v3 on a fork of Base mainnet. They read `BASE_RPC_URL` from `contracts/.env` and are skipped when it's unset.
 
 ### Deploy to Base Sepolia
 
@@ -204,7 +213,9 @@ const hash = await sdk.createAuction(config);
 const quote = await sdk.getQuote(0n, parseUnits("1000", 18));
 console.log(`Cost: ${quote.totalCost} USDC units (fee: ${quote.fee})`);
 
-// After the auction completes, the creator claims the raised funds
+// After the auction completes: open the Uniswap pool, then the creator
+// claims their share of the raise
+await sdk.migrate(0n);
 if (!(await sdk.hasWithdrawnProceeds(0n))) {
   await sdk.withdrawProceeds(0n);
 }

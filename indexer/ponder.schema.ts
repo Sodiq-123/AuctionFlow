@@ -20,6 +20,16 @@ export const auction = onchainTable("auction", (t) => ({
   completedAt: t.bigint(),
   proceedsWithdrawn: t.boolean().notNull().default(false),
   proceedsWithdrawnAt: t.bigint(),
+  // Set at migration. poolAddress/positionId stay null if the auction had
+  // nothing to pair and unlocked without a pool.
+  migratedAt: t.bigint(),
+  poolAddress: t.hex(),
+  positionId: t.bigint(),
+  liquidityTokens: t.bigint(),
+  liquidityPayment: t.bigint(),
+  // Trading fees collected from the pool, in the payment token.
+  lpFeesCreatorPayment: t.bigint().notNull().default(0n),
+  lpFeesProtocolPayment: t.bigint().notNull().default(0n),
   transactionHash: t.hex().notNull(),
 }));
 
@@ -64,4 +74,6 @@ export const protocolMetrics = onchainTable("protocol_metrics", (t) => ({
   completedAuctions: t.integer().notNull(),
   totalVolumeRaised: t.bigint().notNull(),
   totalFeesCollected: t.bigint().notNull(),
+  // Protocol's share of pool trading fees, in the payment token.
+  totalLpFeesCollected: t.bigint().notNull().default(0n),
 }));

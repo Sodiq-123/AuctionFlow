@@ -9,7 +9,7 @@ import {
   zeroAddress,
 } from "viem";
 import { AuctionBuilder } from "./builders/auction-builder";
-import { AuctionConfig, AuctionData, BuyQuote, SupportedChainId } from "./types";
+import { AuctionConfig, AuctionData, BuyQuote, MigrationInfo, SupportedChainId } from "./types";
 import { AUCTION_ADDRESSES } from "./constants/addresses";
 import { DEFAULT_LIQUIDITY_BPS } from "./constants/protocol";
 import { tokenAuctionAbi } from "./abis/token-auction";
@@ -29,6 +29,7 @@ interface RawAuction {
     creator: Address;
     protocolFeeBps: bigint;
     liquidityBps: bigint;
+    lpFeeShareBps: bigint;
   };
   state: number;
   totalRaised: bigint;
@@ -145,8 +146,9 @@ export class AuctionFlowSDK {
   }
 
   /**
-   * Withdraw a completed auction's raised payment tokens to its creator.
-   * Only the auction's creator can call this, and only once.
+   * Pay a completed auction's creator their share of the raise: everything
+   * not reserved for Uniswap liquidity. Creator only, once, before or after
+   * migration.
    */
   async withdrawProceeds(auctionId: bigint): Promise<Hash> {
     if (!this.walletClient) throw new Error("Wallet client required");
@@ -161,6 +163,57 @@ export class AuctionFlowSDK {
     });
 
     return hash;
+  }
+
+  /**
+   * Move a completed auction's liquidity into a Uniswap v3 pool at the
+   * auction's final price, lock it, and unlock the token for trading. Anyone
+   * may call it.
+   */
+  async migrate(auctionId: bigint): Promise<Hash> {
+    return this.write("migrate", [auctionId]);
+  }
+
+  /**
+   * Collect the migrated pool's trading fees. The protocol takes its share and
+   * the creator receives the rest. Anyone may call it.
+   */
+  async collectFees(auctionId: bigint): Promise<Hash> {
+    return this.write("collectFees", [auctionId]);
+  }
+
+  /** The Uniswap pool and position for a migrated auction. */
+  async getMigration(auctionId: bigint): Promise<MigrationInfo> {
+    const [pool, positionId] = await Promise.all([
+      this.publicClient.readContract({
+        address: this.auctionAddress,
+        abi: tokenAuctionAbi,
+        functionName: "poolOf",
+        args: [auctionId],
+      }),
+      this.publicClient.readContract({
+        address: this.auctionAddress,
+        abi: tokenAuctionAbi,
+        functionName: "positionId",
+        args: [auctionId],
+      }),
+    ]);
+    return {
+      pool: pool === zeroAddress ? null : pool,
+      positionId: positionId === 0n ? null : positionId,
+    };
+  }
+
+  private async write(functionName: "migrate" | "collectFees", args: readonly [bigint]): Promise<Hash> {
+    if (!this.walletClient) throw new Error("Wallet client required");
+    return this.walletClient.writeContract({
+      chain: this.chain,
+      account: this.walletClient.account!,
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName,
+      args,
+    });
   }
 
   // Read: Has an auction's creator already withdrawn its proceeds?
@@ -236,6 +289,7 @@ export class AuctionFlowSDK {
       totalSold: raw.totalSold,
       protocolFeeBps: raw.config.protocolFeeBps,
       liquidityBps: raw.config.liquidityBps,
+      lpFeeShareBps: raw.config.lpFeeShareBps,
     };
   }
 }

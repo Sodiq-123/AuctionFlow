@@ -1,5 +1,6 @@
 import { ponder } from "ponder:registry";
 import * as schema from "../ponder.schema";
+import { zeroAddress } from "viem";
 
 // Mirrors BondingCurve.TOKEN_SCALE: prices are per whole token, supplies and
 // amounts are in token wei (18 decimals).
@@ -167,12 +168,41 @@ ponder.on("TokenAuction:AuctionCompleted", async ({ event, context }) => {
 
 ponder.on("TokenAuction:AuctionMigrated", async ({ event, context }) => {
   const { db } = context;
-  const { auctionId: rawAuctionId } = event.args;
+  const { auctionId: rawAuctionId, pool, positionId, tokenLiquidity, paymentLiquidity } = event.args;
+  const auctionId = rawAuctionId.toString();
+  const hasPool = pool !== zeroAddress;
+
+  await db
+    .update(schema.auction, { id: auctionId })
+    .set({
+      state: "MIGRATED",
+      migratedAt: event.block.timestamp,
+      poolAddress: hasPool ? pool : null,
+      positionId: hasPool ? positionId : null,
+      liquidityTokens: tokenLiquidity,
+      liquidityPayment: paymentLiquidity,
+    });
+});
+
+// ─── LpFeesCollected ───
+
+ponder.on("TokenAuction:LpFeesCollected", async ({ event, context }) => {
+  const { db } = context;
+  const { auctionId: rawAuctionId, creatorPaymentFees, protocolPaymentFees } = event.args;
   const auctionId = rawAuctionId.toString();
 
   await db
     .update(schema.auction, { id: auctionId })
-    .set({ state: "MIGRATED" });
+    .set((row) => ({
+      lpFeesCreatorPayment: row.lpFeesCreatorPayment + creatorPaymentFees,
+      lpFeesProtocolPayment: row.lpFeesProtocolPayment + protocolPaymentFees,
+    }));
+
+  await db
+    .update(schema.protocolMetrics, { id: "global" })
+    .set((row) => ({
+      totalLpFeesCollected: row.totalLpFeesCollected + protocolPaymentFees,
+    }));
 });
 
 // ─── ProceedsWithdrawn ───

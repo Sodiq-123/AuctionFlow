@@ -30,7 +30,7 @@ contract TokenAuctionWithdrawTest is Test {
 
     function setUp() public {
         usdc = new MockUSDC();
-        auction = new TokenAuction(feeRecipient, FEE_BPS);
+        auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
         usdc.transfer(buyer, 10_000_000 * 1e6);
     }
 
@@ -66,6 +66,12 @@ contract TokenAuctionWithdrawTest is Test {
         (,, raised,) = auction.auctions(id);
     }
 
+    /// The creator's share of a raise: what isn't reserved for the Uniswap
+    /// pool (these tests use a 50% liquidity share).
+    function _creatorShare(uint256 raised) internal pure returns (uint256) {
+        return raised - (raised * 5_000) / 10_000;
+    }
+
     // --- happy path ----------------------------------------------------------
 
     function test_withdrawProceeds_paysCreatorAfterCompletion() public {
@@ -81,12 +87,15 @@ contract TokenAuctionWithdrawTest is Test {
 
         uint256 before = usdc.balanceOf(creator);
         vm.expectEmit(true, true, false, true);
-        emit TokenAuction.ProceedsWithdrawn(id, creator, raised);
+        emit TokenAuction.ProceedsWithdrawn(id, creator, _creatorShare(raised));
         vm.prank(creator);
         auction.withdrawProceeds(id);
 
-        assertEq(usdc.balanceOf(creator) - before, raised, "creator received proceeds");
-        assertEq(usdc.balanceOf(address(auction)), 0, "contract fully drained");
+        assertEq(usdc.balanceOf(creator) - before, _creatorShare(raised), "creator received their share");
+        assertEq(
+            usdc.balanceOf(address(auction)), raised - _creatorShare(raised),
+            "liquidity share stays reserved for the pool"
+        );
         assertTrue(auction.proceedsWithdrawn(id), "withdrawn flag set");
     }
 
@@ -98,7 +107,7 @@ contract TokenAuctionWithdrawTest is Test {
 
         vm.prank(creator);
         auction.withdrawProceeds(id);
-        assertEq(usdc.balanceOf(creator), cost, "creator paid out without completeAuction");
+        assertEq(usdc.balanceOf(creator), _creatorShare(cost), "creator paid out without completeAuction");
     }
 
     // --- guards --------------------------------------------------------------
@@ -184,10 +193,11 @@ contract TokenAuctionWithdrawTest is Test {
         vm.prank(creator);
         auction.withdrawProceeds(first);
 
-        assertEq(usdc.balanceOf(creator), firstRaised, "only first auction paid out");
+        assertEq(usdc.balanceOf(creator), _creatorShare(firstRaised), "only first auction paid out");
         assertEq(
-            usdc.balanceOf(address(auction)), secondRaised,
-            "second auction's funds untouched"
+            usdc.balanceOf(address(auction)),
+            secondRaised + (firstRaised - _creatorShare(firstRaised)),
+            "second auction's funds and first auction's liquidity share untouched"
         );
         assertFalse(auction.proceedsWithdrawn(second), "second still unwithdrawn");
     }

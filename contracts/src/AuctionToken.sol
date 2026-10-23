@@ -27,6 +27,12 @@ contract AuctionToken is ERC20, Ownable {
         _mint(to, amount);
     }
 
+    /// @notice Burn tokens held by the owner (the auction contract), such as
+    ///         liquidity tokens Uniswap didn't use.
+    function burn(uint256 amount) external onlyOwner {
+        _burn(msg.sender, amount);
+    }
+
     /// @notice Permanently unlock transfers. Called by the auction contract
     ///         as part of migration.
     function enableTransfers() external onlyOwner {

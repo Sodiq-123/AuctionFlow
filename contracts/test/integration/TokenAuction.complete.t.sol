@@ -31,7 +31,7 @@ contract TokenAuctionCompleteTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         // The test contract deploys the auction, so it is the Ownable owner.
-        auction = new TokenAuction(feeRecipient, FEE_BPS);
+        auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
         usdc.transfer(buyer, 10_000_000 * 1e6);
     }
 

@@ -47,7 +47,7 @@ contract TokenAuctionAdminTest is Test {
 
     function setUp() public {
         usdc = new MockUSDC();
-        auction = new TokenAuction(feeRecipient, FEE_BPS);
+        auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
         usdc.transfer(buyer, 10_000_000e6);
     }
 
@@ -83,13 +83,18 @@ contract TokenAuctionAdminTest is Test {
 
     function test_constructor_rejectsZeroFeeRecipient() public {
         vm.expectRevert("Zero fee recipient");
-        new TokenAuction(address(0), FEE_BPS);
+        new TokenAuction(address(0), FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
+    }
+
+    function test_constructor_rejectsZeroPositionManager() public {
+        vm.expectRevert("Zero position manager");
+        new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(address(0)));
     }
 
     function test_constructor_rejectsFeeAboveCap() public {
         uint256 cap = auction.MAX_FEE_BPS();
         vm.expectRevert("Fee too high");
-        new TokenAuction(feeRecipient, cap + 1);
+        new TokenAuction(feeRecipient, cap + 1, INonfungiblePositionManager(makeAddr("positionManager")));
     }
 
     // --- fee recipient ------------------------------------------------------
@@ -156,7 +161,8 @@ contract TokenAuctionAdminTest is Test {
         auction.completeAuction(id);
         vm.prank(creator);
         auction.withdrawProceeds(id);
-        assertEq(auction.custodied(address(usdc)), 0);
+        // The liquidity share stays owed until migration moves it into the pool.
+        assertEq(auction.custodied(address(usdc)), (cost * 5_000) / 10_000);
     }
 
     function test_sweep_recoversDirectTransfer() public {
@@ -186,7 +192,7 @@ contract TokenAuctionAdminTest is Test {
         auction.completeAuction(id);
         auction.withdrawProceeds(id);
         vm.stopPrank();
-        assertEq(usdc.balanceOf(creator), owed);
+        assertEq(usdc.balanceOf(creator), owed - (owed * 5_000) / 10_000, "creator's share, liquidity still reserved");
     }
 
     function test_sweep_revertsWithNoExcess() public {

@@ -39,6 +39,15 @@ export interface AuctionData {
   totalSold: bigint;
   protocolFeeBps: bigint;
   liquidityBps: bigint;
+  /** Protocol's share of the Uniswap pool's trading fees, in basis points. */
+  lpFeeShareBps: bigint;
+}
+
+export interface MigrationInfo {
+  /** The Uniswap v3 pool, or null if the auction unlocked without one. */
+  pool: Address | null;
+  /** The Uniswap position NFT, held by the auction contract forever. */
+  positionId: bigint | null;
 }
 
 export interface BuyQuote {

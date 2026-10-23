@@ -127,20 +127,38 @@ The bonding-curve helpers are also exported directly for UI/preview use:
 import { calculateBuyQuote, spotPrice } from "auctionflow-sdk";
 ```
 
-## Withdraw proceeds
+## After the auction: migrate, withdraw, collect fees
 
-Once an auction reaches `COMPLETED` — either by hitting `maxRaise` or via
-`completeAuction` after `endTime` — its creator claims the raised payment
-tokens. Callable once, by the creator only.
+Once an auction completes, by filling up or via `completeAuction` after
+`endTime`, three things happen. Each can be called by anyone except the
+withdrawal, which only the creator can make.
 
 ```typescript
+// 1. Open the Uniswap v3 pool and unlock the token for trading.
+await sdk.migrate(0n);
+const { pool, positionId } = await sdk.getMigration(0n);
+
+// 2. The creator claims their share of the raise.
 if (!(await sdk.hasWithdrawnProceeds(0n))) {
-  const hash = await sdk.withdrawProceeds(0n);
+  await sdk.withdrawProceeds(0n);
 }
+
+// 3. Later, collect the pool's trading fees.
+await sdk.collectFees(0n);
 ```
 
-Protocol fees are routed to the fee recipient at buy time, so the amount paid
-out is exactly the auction's `totalRaised`.
+**Migration** pairs the auction's liquidity share of the raise with newly
+minted tokens and opens a 1% Uniswap v3 pool **at the auction's final price**,
+so there is no price jump to arbitrage. If someone initialised the pool
+beforehand at a different price, migration corrects it first. The position NFT
+stays in the auction contract forever, so the liquidity can never be pulled.
+Tokens Uniswap doesn't use are burned, and leftover funds go to the creator.
+
+**Withdrawal** pays the creator everything not reserved for liquidity: with the
+default 50% share, half the raise. It works before or after migration.
+
+**Trading fees** from the pool go to the creator, minus the protocol's share
+(`lpFeeShareBps`, at most 50%), fixed when the auction is created.
 
 ## How the bonding curve works
 
@@ -177,7 +195,10 @@ Early buyers pay less; later buyers pay more.
 | `getSpotPrice(auctionId)` | Read the current on-chain spot price. |
 | `getQuote(auctionId, amount)` | Tokens actually filled, cost, fee, post-trade spot price, and whether the purchase completes the auction. |
 | `applySlippage(total, slippageBps)` | The maximum cost `buyTokens` would send for a quoted total. |
-| `withdrawProceeds(auctionId)` | Pay a completed auction's `totalRaised` to its creator. Creator-only, once. Requires a wallet client. |
+| `migrate(auctionId)` | Open the Uniswap v3 pool at the final price, lock the liquidity, unlock the token. Anyone may call. |
+| `getMigration(auctionId)` | The pool address and position NFT id, or `null` before migration. |
+| `withdrawProceeds(auctionId)` | Pay the creator their share of the raise (what isn't reserved for liquidity). Creator-only, once. |
+| `collectFees(auctionId)` | Collect the pool's trading fees: protocol share to the protocol, the rest to the creator. Anyone may call. |
 | `hasWithdrawnProceeds(auctionId)` | Whether the creator has already claimed the proceeds. |
 
 ## License
