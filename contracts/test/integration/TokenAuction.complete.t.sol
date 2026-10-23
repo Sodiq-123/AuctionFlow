@@ -109,7 +109,7 @@ contract TokenAuctionCompleteTest is Test {
         vm.warp(startTime);
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
-        auction.buyTokens(id, amount); // auto-completes here
+        auction.buyTokens(id, amount, type(uint256).max); // auto-completes here
         vm.stopPrank();
 
         assertEq(uint256(_state(id)), uint256(TokenAuction.AuctionState.COMPLETED));

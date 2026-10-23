@@ -12,7 +12,7 @@ import { AuctionBuilder } from "./builders/auction-builder";
 import { AuctionConfig, AuctionData, BuyQuote, SupportedChainId } from "./types";
 import { AUCTION_ADDRESSES } from "./constants/addresses";
 import { tokenAuctionAbi } from "./abis/token-auction";
-import { calculateBuyQuote } from "./utils/bonding-curve";
+import { applySlippage, calculateBuyQuote, DEFAULT_SLIPPAGE_BPS } from "./utils/bonding-curve";
 import { CHAINS } from "./utils/chains";
 
 /** Shape of the nested tuple returned by the on-chain `auctions(id)` getter. */
@@ -105,8 +105,27 @@ export class AuctionFlowSDK {
     return hash;
   }
 
-  async buyTokens(auctionId: bigint, amount: bigint): Promise<Hash> {
+  /**
+   * Buy `amount` tokens (in token wei). The price rises with every purchase, so
+   * the contract takes a maximum total cost and reverts if the price moved past
+   * it before the transaction landed.
+   *
+   * Pass `maxCost` to set that bound exactly, or `slippageBps` to derive it
+   * from a fresh quote (default 100 = 1% above the quoted total).
+   */
+  async buyTokens(
+    auctionId: bigint,
+    amount: bigint,
+    options: { maxCost?: bigint; slippageBps?: number } = {}
+  ): Promise<Hash> {
     if (!this.walletClient) throw new Error("Wallet client required");
+
+    const maxCost =
+      options.maxCost ??
+      applySlippage(
+        (await this.getQuote(auctionId, amount)).totalCost,
+        options.slippageBps ?? DEFAULT_SLIPPAGE_BPS
+      );
 
     const hash = await this.walletClient.writeContract({
       chain: this.chain,
@@ -114,7 +133,7 @@ export class AuctionFlowSDK {
       address: this.auctionAddress,
       abi: tokenAuctionAbi,
       functionName: "buyTokens",
-      args: [auctionId, amount],
+      args: [auctionId, amount, maxCost],
     });
 
     return hash;

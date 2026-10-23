@@ -44,3 +44,17 @@ export function calculateBuyQuote(
     spotPriceAfter: spotPrice(currentSupply + amount, basePrice, slope),
   };
 }
+
+/** Default slippage tolerance for `buyTokens`, in basis points (100 = 1%). */
+export const DEFAULT_SLIPPAGE_BPS = 100;
+
+/**
+ * Upper bound a buyer will accept for a quoted total, given a tolerance in
+ * basis points. Rounds up so a tolerance never comes out tighter than asked.
+ */
+export function applySlippage(total: bigint, slippageBps: number): bigint {
+  if (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 10_000) {
+    throw new Error("slippageBps must be an integer between 0 and 10000");
+  }
+  return (total * BigInt(10_000 + slippageBps) + 9_999n) / 10_000n;
+}

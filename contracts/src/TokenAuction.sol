@@ -41,6 +41,16 @@ contract TokenAuction is ReentrancyGuard, Ownable {
     address public protocolFeeRecipient;
     uint256 public defaultFeeBps;
 
+    /// @notice Upper bound on the protocol fee, so the owner can never set a
+    ///         fee that confiscates a meaningful share of a purchase.
+    uint256 public constant MAX_FEE_BPS = 1000; // 10%
+
+    /// @notice Payment tokens this contract owes to auction creators, per token:
+    ///         the sum of `totalRaised` across auctions not yet withdrawn.
+    ///         Anything held above this is excess (e.g. tokens sent here
+    ///         directly) and can be recovered with `sweep`.
+    mapping(address => uint256) public custodied;
+
     // Events — these are what the indexer will listen to
     event AuctionCreated(
         uint256 indexed auctionId,
@@ -67,8 +77,13 @@ contract TokenAuction is ReentrancyGuard, Ownable {
     event AuctionCompleted(uint256 indexed auctionId, uint256 totalRaised, uint256 totalSold);
     event AuctionMigrated(uint256 indexed auctionId, address liquidityPool);
     event ProceedsWithdrawn(uint256 indexed auctionId, address indexed creator, uint256 amount);
+    event ProtocolFeeRecipientUpdated(address indexed previous, address indexed current);
+    event DefaultFeeBpsUpdated(uint256 previous, uint256 current);
+    event Swept(address indexed token, address indexed to, uint256 amount);
 
     constructor(address feeRecipient_, uint256 defaultFeeBps_) Ownable(msg.sender) {
+        require(feeRecipient_ != address(0), "Zero fee recipient");
+        require(defaultFeeBps_ <= MAX_FEE_BPS, "Fee too high");
         protocolFeeRecipient = feeRecipient_;
         defaultFeeBps = defaultFeeBps_;
     }
@@ -115,11 +130,17 @@ contract TokenAuction is ReentrancyGuard, Ownable {
         );
     }
 
-    function buyTokens(uint256 auctionId, uint256 amount) external nonReentrant {
+    /// @notice Buy `amount` tokens (in token wei) from an active auction.
+    /// @param maxCost Most the buyer will pay in total (cost + protocol fee), in
+    ///        payment-token units. The price rises with every purchase, so a
+    ///        quote can be stale by the time a transaction lands; this bound
+    ///        makes the buy revert instead of filling at a worse price.
+    function buyTokens(uint256 auctionId, uint256 amount, uint256 maxCost) external nonReentrant {
         AuctionData storage auction = auctions[auctionId];
         require(auction.state == AuctionState.ACTIVE, "Auction not active");
         require(block.timestamp >= auction.config.startTime, "Not started");
         require(block.timestamp <= auction.config.endTime, "Ended");
+        require(amount > 0, "Zero amount");
 
         uint256 cost = BondingCurve.calculateBuyCost(
             auction.totalSold,
@@ -127,34 +148,43 @@ contract TokenAuction is ReentrancyGuard, Ownable {
             auction.config.basePrice,
             auction.config.slope
         );
-
         uint256 protocolFee = (cost * auction.config.protocolFeeBps) / 10000;
-        uint256 totalCost = cost + protocolFee;
 
+        require(cost + protocolFee <= maxCost, "Slippage exceeded");
         require(auction.totalRaised + cost <= auction.config.maxRaise, "Exceeds max raise");
 
-        // Collect payment
-        auction.config.paymentToken.safeTransferFrom(msg.sender, address(this), cost);
-        if (protocolFee > 0) {
-            auction.config.paymentToken.safeTransferFrom(msg.sender, protocolFeeRecipient, protocolFee);
-        }
-
-        // Mint tokens to buyer
-        auction.config.token.mint(msg.sender, amount);
-
-        // Update state
+        // Effects before interactions.
+        IERC20 paymentToken = auction.config.paymentToken;
         auction.totalRaised += cost;
         auction.totalSold += amount;
         userPurchases[auctionId][msg.sender] += amount;
+        custodied[address(paymentToken)] += cost;
+
+        bool completed = auction.totalRaised >= auction.config.maxRaise;
+        if (completed) {
+            auction.state = AuctionState.COMPLETED;
+        }
+
+        // Collect payment. Measuring the balance change rejects fee-on-transfer
+        // and rebasing tokens, which would leave `custodied` larger than what
+        // the contract actually holds and make the last withdrawal fail.
+        uint256 balanceBefore = paymentToken.balanceOf(address(this));
+        paymentToken.safeTransferFrom(msg.sender, address(this), cost);
+        require(
+            paymentToken.balanceOf(address(this)) - balanceBefore == cost,
+            "Unsupported payment token"
+        );
+        if (protocolFee > 0) {
+            paymentToken.safeTransferFrom(msg.sender, protocolFeeRecipient, protocolFee);
+        }
+
+        auction.config.token.mint(msg.sender, amount);
 
         emit TokensPurchased(
             auctionId, msg.sender, amount, cost, protocolFee,
             auction.totalRaised, auction.totalSold
         );
-
-        // Auto-complete if max raise hit
-        if (auction.totalRaised >= auction.config.maxRaise) {
-            auction.state = AuctionState.COMPLETED;
+        if (completed) {
             emit AuctionCompleted(auctionId, auction.totalRaised, auction.totalSold);
         }
     }
@@ -187,9 +217,41 @@ contract TokenAuction is ReentrancyGuard, Ownable {
 
         // Effects before interaction.
         proceedsWithdrawn[auctionId] = true;
+        custodied[address(auction.config.paymentToken)] -= amount;
         auction.config.paymentToken.safeTransfer(auction.config.creator, amount);
 
         emit ProceedsWithdrawn(auctionId, auction.config.creator, amount);
+    }
+
+    /// @notice Change where protocol fees are sent. Applies to purchases made
+    ///         after the change, in every auction.
+    function setProtocolFeeRecipient(address recipient) external onlyOwner {
+        require(recipient != address(0), "Zero fee recipient");
+        emit ProtocolFeeRecipientUpdated(protocolFeeRecipient, recipient);
+        protocolFeeRecipient = recipient;
+    }
+
+    /// @notice Change the fee for auctions created from now on. Existing
+    ///         auctions keep the fee they were created with, so a creator's
+    ///         terms can never change mid-sale.
+    function setDefaultFeeBps(uint256 feeBps) external onlyOwner {
+        require(feeBps <= MAX_FEE_BPS, "Fee too high");
+        emit DefaultFeeBpsUpdated(defaultFeeBps, feeBps);
+        defaultFeeBps = feeBps;
+    }
+
+    /// @notice Recover tokens held above what is owed to auction creators,
+    ///         such as tokens transferred to this contract directly. Funds
+    ///         backing an unwithdrawn auction can never be swept.
+    function sweep(IERC20 token, address to) external onlyOwner nonReentrant {
+        require(to != address(0), "Zero recipient");
+        uint256 balance = token.balanceOf(address(this));
+        uint256 owed = custodied[address(token)];
+        require(balance > owed, "Nothing to sweep");
+
+        uint256 excess = balance - owed;
+        token.safeTransfer(to, excess);
+        emit Swept(address(token), to, excess);
     }
 
     // View functions

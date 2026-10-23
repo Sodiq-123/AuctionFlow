@@ -49,7 +49,7 @@ contract TokenAuctionWithdrawTest is Test {
     function _buy(uint256 id, uint256 amount) internal {
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
-        auction.buyTokens(id, amount);
+        auction.buyTokens(id, amount, type(uint256).max);
         vm.stopPrank();
     }
 

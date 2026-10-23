@@ -20,12 +20,16 @@ contract BuyHandler is Test {
     uint256 public auctionId;
 
     address[] public actors;
-    uint256 public ghostSold; // sum of amounts from every successful buy
+    address public owner;
+    uint256 public ghostSold;    // sum of amounts from every successful buy
+    uint256 public ghostDonated; // payment tokens sent to the auction directly
+    uint256 public ghostSwept;   // payment tokens the owner recovered
 
-    constructor(TokenAuction _auction, MockUSDC _usdc, uint256 _auctionId) {
+    constructor(TokenAuction _auction, MockUSDC _usdc, uint256 _auctionId, address _owner) {
         auction = _auction;
         usdc = _usdc;
         auctionId = _auctionId;
+        owner = _owner;
 
         for (uint256 i = 0; i < 3; i++) {
             address actor = makeAddr(string(abi.encodePacked("actor", vm.toString(i))));
@@ -41,11 +45,32 @@ contract BuyHandler is Test {
         amount = bound(amount, 1e15, 1e21); // 0.001 .. 1,000 tokens
 
         vm.prank(actor);
-        try auction.buyTokens(auctionId, amount) {
+        try auction.buyTokens(auctionId, amount, type(uint256).max) {
             ghostSold += amount;
         } catch {
             // Expected reverts (exceeds max raise, auction completed) are fine —
             // the invariants must still hold whether or not a buy succeeds.
+        }
+    }
+
+    /// Someone transfers payment tokens straight to the contract, bypassing
+    /// buyTokens: the situation that left 20 USDC stranded on testnet.
+    function donate(uint256 actorSeed, uint256 amount) external {
+        address actor = actors[actorSeed % actors.length];
+        amount = bound(amount, 1, 1e9);
+        vm.prank(actor);
+        usdc.transfer(address(auction), amount);
+        ghostDonated += amount;
+    }
+
+    /// The owner recovers whatever excess exists at this moment.
+    function sweep() external {
+        uint256 before = usdc.balanceOf(owner);
+        vm.prank(owner);
+        try auction.sweep(usdc, owner) {
+            ghostSwept += usdc.balanceOf(owner) - before;
+        } catch {
+            // "Nothing to sweep" is an expected outcome.
         }
     }
 }
@@ -77,11 +102,13 @@ contract TokenAuctionInvariantTest is Test {
         );
         vm.warp(startTime);
 
-        handler = new BuyHandler(auction, usdc, auctionId);
+        handler = new BuyHandler(auction, usdc, auctionId, address(this));
 
-        // Only fuzz through the handler's buy entrypoint.
-        bytes4[] memory selectors = new bytes4[](1);
+        // Only fuzz through the handler's entrypoints.
+        bytes4[] memory selectors = new bytes4[](3);
         selectors[0] = BuyHandler.buy.selector;
+        selectors[1] = BuyHandler.donate.selector;
+        selectors[2] = BuyHandler.sweep.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
     }
@@ -113,11 +140,28 @@ contract TokenAuctionInvariantTest is Test {
         assertLe(sold, MAX_SUPPLY);
     }
 
-    /// Solvency: the contract must custody exactly the funds it says it raised.
-    /// The handler never withdraws, so the balance must track totalRaised 1:1.
-    function invariant_contractCustodiesRaisedFunds() public view {
+    /// Custody accounting matches what the auction raised. No withdrawals
+    /// happen in this suite, so everything raised is still owed.
+    function invariant_custodiedEqualsRaised() public view {
         (uint256 raised,) = _totals();
-        assertEq(usdc.balanceOf(address(auction)), raised);
+        assertEq(auction.custodied(address(usdc)), raised);
+    }
+
+    /// Solvency: the contract always holds at least what it owes creators,
+    /// however much is donated to it or swept out of it.
+    function invariant_balanceCoversCustodied() public view {
+        assertGe(usdc.balanceOf(address(auction)), auction.custodied(address(usdc)));
+    }
+
+    /// Every unit is accounted for: balance = raised + donated - swept.
+    /// Sweeping can only ever remove donated excess, never creator funds.
+    function invariant_balanceFullyAccounted() public view {
+        (uint256 raised,) = _totals();
+        assertEq(
+            usdc.balanceOf(address(auction)),
+            raised + handler.ghostDonated() - handler.ghostSwept()
+        );
+        assertLe(handler.ghostSwept(), handler.ghostDonated());
     }
 
     /// The contract's own accounting must match the handler's independent tally.

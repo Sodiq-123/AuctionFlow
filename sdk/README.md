@@ -83,6 +83,17 @@ const hash = await sdk.createAuction(config);
 const hash = await sdk.buyTokens(0n, parseUnits("1000", 18));
 ```
 
+Every purchase raises the price, so another buyer can move it between your
+quote and your transaction. `buyTokens` sends a maximum total cost (cost plus
+fee) and the contract reverts if the price moved past it. By default the SDK
+quotes the purchase and allows 1% above that quote. To change the tolerance, or
+set the bound yourself:
+
+```typescript
+await sdk.buyTokens(0n, amount, { slippageBps: 50 });        // 0.5% tolerance
+await sdk.buyTokens(0n, amount, { maxCost: 11_000_000n });   // exact bound, in USDC units
+```
+
 ## Read state & quotes
 
 ```typescript
@@ -146,10 +157,11 @@ Early buyers pay less; later buyers pay more.
 | `new AuctionFlowSDK({ chainId, rpcUrl, walletClient?, auctionAddress? })` | Construct against a supported chain. `auctionAddress` overrides the built-in deployment; without it, a chain with no canonical deployment throws. |
 | `buildAuction()` | Returns an `AuctionBuilder` (fluent config builder). |
 | `createAuction(config)` | Send the `createAuction` transaction. Requires a wallet client. |
-| `buyTokens(auctionId, amount)` | Send the `buyTokens` transaction. Requires a wallet client. |
+| `buyTokens(auctionId, amount, { maxCost?, slippageBps? })` | Send the `buyTokens` transaction with a maximum total cost; reverts if the price moved past it. Defaults to the quote plus 1%. Requires a wallet client. |
 | `getAuction(auctionId)` | Read the full auction struct. |
 | `getSpotPrice(auctionId)` | Read the current on-chain spot price. |
 | `getQuote(auctionId, amount)` | Off-chain cost + fee + post-trade spot price. |
+| `applySlippage(total, slippageBps)` | The maximum cost `buyTokens` would send for a quoted total. |
 | `withdrawProceeds(auctionId)` | Pay a completed auction's `totalRaised` to its creator. Creator-only, once. Requires a wallet client. |
 | `hasWithdrawnProceeds(auctionId)` | Whether the creator has already claimed the proceeds. |
 

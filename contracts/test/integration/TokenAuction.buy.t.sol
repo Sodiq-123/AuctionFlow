@@ -73,7 +73,7 @@ contract TokenAuctionBuyTest is Test {
 
         vm.startPrank(buyer);
         usdc.approve(address(auction), cost + fee);
-        auction.buyTokens(id, amount);
+        auction.buyTokens(id, amount, type(uint256).max);
         vm.stopPrank();
 
         AuctionToken token = _token(id);
@@ -98,7 +98,7 @@ contract TokenAuctionBuyTest is Test {
         usdc.approve(address(auction), cost + fee);
         vm.expectEmit(true, true, false, true);
         emit TokenAuction.TokensPurchased(id, buyer, amount, cost, fee, cost, amount);
-        auction.buyTokens(id, amount);
+        auction.buyTokens(id, amount, type(uint256).max);
         vm.stopPrank();
     }
 
@@ -112,8 +112,8 @@ contract TokenAuctionBuyTest is Test {
 
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
-        auction.buyTokens(id, amount);
-        auction.buyTokens(id, amount);
+        auction.buyTokens(id, amount, type(uint256).max);
+        auction.buyTokens(id, amount, type(uint256).max);
         vm.stopPrank();
 
         (uint256 raised, uint256 sold) = _totals(id);
@@ -132,7 +132,7 @@ contract TokenAuctionBuyTest is Test {
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
         vm.expectRevert("Not started");
-        auction.buyTokens(id, 1_000e18);
+        auction.buyTokens(id, 1_000e18, type(uint256).max);
         vm.stopPrank();
     }
 
@@ -142,7 +142,7 @@ contract TokenAuctionBuyTest is Test {
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
         vm.expectRevert("Ended");
-        auction.buyTokens(id, 1_000e18);
+        auction.buyTokens(id, 1_000e18, type(uint256).max);
         vm.stopPrank();
     }
 
@@ -153,7 +153,7 @@ contract TokenAuctionBuyTest is Test {
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
         vm.expectRevert("Exceeds max raise");
-        auction.buyTokens(id, amount);
+        auction.buyTokens(id, amount, type(uint256).max);
         vm.stopPrank();
     }
 
@@ -167,13 +167,72 @@ contract TokenAuctionBuyTest is Test {
         usdc.approve(address(auction), type(uint256).max);
         vm.expectEmit(true, false, false, true);
         emit TokenAuction.AuctionCompleted(id, cost, amount);
-        auction.buyTokens(id, amount);
+        auction.buyTokens(id, amount, type(uint256).max);
 
         assertEq(uint256(_state(id)), uint256(TokenAuction.AuctionState.COMPLETED), "auto-completed");
 
         // Further buys revert because the auction is no longer active.
         vm.expectRevert("Auction not active");
-        auction.buyTokens(id, 1e18);
+        auction.buyTokens(id, 1e18, type(uint256).max);
         vm.stopPrank();
+    }
+
+    // --- slippage protection ------------------------------------------------
+
+    function test_buyTokens_succeedsAtExactMaxCost() public {
+        uint256 id = _createAuction(MAX_RAISE);
+        uint256 amount = 1_000e18;
+        uint256 cost = BondingCurve.calculateBuyCost(0, amount, BASE_PRICE, SLOPE);
+        uint256 total = cost + (cost * FEE_BPS) / 10_000;
+
+        vm.startPrank(buyer);
+        usdc.approve(address(auction), total);
+        auction.buyTokens(id, amount, total);
+        vm.stopPrank();
+
+        assertEq(_token(id).balanceOf(buyer), amount);
+    }
+
+    function test_buyTokens_revertsWhenTotalExceedsMaxCost() public {
+        uint256 id = _createAuction(MAX_RAISE);
+        uint256 amount = 1_000e18;
+        uint256 cost = BondingCurve.calculateBuyCost(0, amount, BASE_PRICE, SLOPE);
+        uint256 total = cost + (cost * FEE_BPS) / 10_000;
+
+        vm.startPrank(buyer);
+        usdc.approve(address(auction), type(uint256).max);
+        vm.expectRevert("Slippage exceeded");
+        auction.buyTokens(id, amount, total - 1);
+        vm.stopPrank();
+    }
+
+    /// The scenario slippage protection exists for: a buyer quotes, someone
+    /// else buys first and moves the price, and the original order would now
+    /// fill above what the buyer agreed to.
+    function test_buyTokens_protectsAgainstFrontRun() public {
+        uint256 id = _createAuction(MAX_RAISE);
+        uint256 amount = 1_000e18;
+        uint256 quoted = BondingCurve.calculateBuyCost(0, amount, BASE_PRICE, SLOPE);
+        uint256 maxCost = quoted + (quoted * FEE_BPS) / 10_000;
+
+        address frontRunner = makeAddr("frontRunner");
+        usdc.transfer(frontRunner, 1_000_000e6);
+        vm.startPrank(frontRunner);
+        usdc.approve(address(auction), type(uint256).max);
+        auction.buyTokens(id, 1_000e18, type(uint256).max);
+        vm.stopPrank();
+
+        vm.startPrank(buyer);
+        usdc.approve(address(auction), type(uint256).max);
+        vm.expectRevert("Slippage exceeded");
+        auction.buyTokens(id, amount, maxCost);
+        vm.stopPrank();
+    }
+
+    function test_buyTokens_revertsOnZeroAmount() public {
+        uint256 id = _createAuction(MAX_RAISE);
+        vm.prank(buyer);
+        vm.expectRevert("Zero amount");
+        auction.buyTokens(id, 0, type(uint256).max);
     }
 }
