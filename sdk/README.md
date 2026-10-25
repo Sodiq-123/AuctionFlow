@@ -53,11 +53,31 @@ const sdk = new AuctionFlowSDK({
 
 Without it, constructing on a chain that has no built-in deployment throws.
 
-## Create an auction
+## How a launch works
 
-The builder validates required fields and basic invariants (`startTime < endTime`,
-positive `basePrice` / `maxSupply` / `maxRaise`, a liquidity share between 20% and
-100%) before producing a config.
+1. **Launch.** A token is created and trading starts immediately on a bonding
+   curve: every buy raises the price, every sell lowers it.
+2. **Trade.** Anyone can buy, and sell back to the curve, until the auction has
+   raised its **graduation threshold** (`maxRaise`). Tokens can't be transferred
+   in the meantime; selling back is how you exit.
+3. **Graduate.** The purchase that reaches the threshold closes the curve, and
+   the token migrates to a Uniswap v3 pool where it trades freely.
+
+## Launch a token (one click)
+
+```typescript
+const hash = await sdk.launch("My Token", "MTK", "ipfs://<metadata-json>");
+```
+
+Everything except the name, symbol and metadata (such as the token image) comes
+from the protocol's standard launch preset: the payment token, supply, curve,
+graduation threshold and liquidity share.
+
+## Create an auction with custom parameters
+
+The builder validates required fields and basic invariants (positive
+`basePrice` / `maxSupply` / `maxRaise`, a liquidity share between 20% and 100%)
+before producing a config.
 
 ```typescript
 const config = sdk
@@ -68,12 +88,9 @@ const config = sdk
     parseUnits("0.01", 6), // base price: 0.01 USDC
     parseUnits("0.000001", 6) // slope
   )
-  .withMaxRaise(parseUnits("50000", 6))
+  .withMaxRaise(parseUnits("50000", 6)) // graduation threshold
   .withLiquidity(5_000) // 50% of the raise seeds the Uniswap pool (the default)
-  .withSchedule(
-    BigInt(Math.floor(Date.now() / 1000) + 3600),
-    BigInt(Math.floor(Date.now() / 1000) + 3600 * 72)
-  )
+  .withMetadata("ipfs://<metadata-json>")
   .build();
 
 const hash = await sdk.createAuction(config);
@@ -85,7 +102,8 @@ creator receives the rest. The token supply must leave room for those tokens on
 top of a sold-out sale, so the contract rejects a `maxSupply` that is too small.
 
 Auction tokens can't be transferred until the auction migrates. That stops any
-holder from creating or pricing the Uniswap pool ahead of the auction.
+holder from creating or pricing the Uniswap pool ahead of the auction. Holders
+can always exit before then by selling back to the curve.
 
 ## Buy tokens
 
@@ -109,6 +127,26 @@ the remaining budget buys, and closes the auction. `getQuote` reports this up
 front: `quote.amount` is what you'll actually receive and `quote.fillsAuction`
 says whether your purchase completes the sale.
 
+## Sell tokens
+
+Until graduation, anyone can sell tokens back to the curve at the curve price,
+minus the protocol fee. The tokens are burned and the seller is paid from the
+raise, so the price falls by exactly what the purchase raised it.
+
+```typescript
+const quote = await sdk.getSellQuote(0n, parseUnits("400", 18));
+console.log(quote.proceeds, quote.fee, quote.netProceeds);
+
+await sdk.sellTokens(0n, parseUnits("400", 18));                       // 1% below the quote
+await sdk.sellTokens(0n, parseUnits("400", 18), { slippageBps: 50 });  // 0.5% tolerance
+await sdk.sellTokens(0n, parseUnits("400", 18), { minProceeds: 4_000_000n });
+```
+
+Like `buyTokens`, the contract reverts if the price moved past your bound before
+the transaction landed. Purchases round up and sales round down, so a round
+trip can never profit, and the contract always holds enough to buy back every
+outstanding token.
+
 ## Read state & quotes
 
 ```typescript
@@ -124,14 +162,13 @@ console.log(quote.cost, quote.fee, quote.totalCost, quote.spotPriceAfter);
 The bonding-curve helpers are also exported directly for UI/preview use:
 
 ```typescript
-import { calculateBuyQuote, spotPrice } from "auctionflow-sdk";
+import { calculateBuyQuote, calculateSellProceeds, spotPrice } from "auctionflow-sdk";
 ```
 
-## After the auction: migrate, withdraw, collect fees
+## After graduation: migrate, withdraw, collect fees
 
-Once an auction completes, by filling up or via `completeAuction` after
-`endTime`, three things happen. Each can be called by anyone except the
-withdrawal, which only the creator can make.
+Once an auction graduates, three things happen. Each can be called by anyone
+except the withdrawal, which only the creator can make.
 
 ```typescript
 // 1. Open the Uniswap v3 pool and unlock the token for trading.
@@ -188,13 +225,17 @@ Early buyers pay less; later buyers pay more.
 | Member | Description |
 | --- | --- |
 | `new AuctionFlowSDK({ chainId, rpcUrl, walletClient?, auctionAddress? })` | Construct against a supported chain. `auctionAddress` overrides the built-in deployment; without it, a chain with no canonical deployment throws. |
+| `launch(name, symbol, metadataURI?)` | One-click launch with the protocol's standard preset. Requires a wallet client. |
 | `buildAuction()` | Returns an `AuctionBuilder` (fluent config builder). |
-| `createAuction(config)` | Send the `createAuction` transaction. Requires a wallet client. |
+| `createAuction(config)` | Launch with custom parameters. Requires a wallet client. |
 | `buyTokens(auctionId, amount, { maxCost?, slippageBps? })` | Send the `buyTokens` transaction with a maximum total cost; reverts if the price moved past it. Defaults to the quote plus 1%. Requires a wallet client. |
 | `getAuction(auctionId)` | Read the full auction struct. |
 | `getSpotPrice(auctionId)` | Read the current on-chain spot price. |
 | `getQuote(auctionId, amount)` | Tokens actually filled, cost, fee, post-trade spot price, and whether the purchase completes the auction. |
 | `applySlippage(total, slippageBps)` | The maximum cost `buyTokens` would send for a quoted total. |
+| `sellTokens(auctionId, amount, { minProceeds?, slippageBps? })` | Sell back to the curve before graduation, with a minimum payout; defaults to the quote minus 1%. Requires a wallet client. |
+| `getSellQuote(auctionId, amount)` | Proceeds, fee, net payout, and post-trade spot price for a sale. |
+| `applySellSlippage(netProceeds, slippageBps)` | The minimum payout `sellTokens` would send for a quoted sale. |
 | `migrate(auctionId)` | Open the Uniswap v3 pool at the final price, lock the liquidity, unlock the token. Anyone may call. |
 | `getMigration(auctionId)` | The pool address and position NFT id, or `null` before migration. |
 | `withdrawProceeds(auctionId)` | Pay the creator their share of the raise (what isn't reserved for liquidity). Creator-only, once. |

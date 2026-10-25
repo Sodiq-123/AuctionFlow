@@ -19,27 +19,36 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         IERC20 paymentToken;          // e.g., USDC
         uint256 basePrice;            // Starting price in payment token units
         uint256 slope;                // Bonding curve slope
-        uint256 maxRaise;             // Max payment tokens to collect
-        uint256 startTime;
-        uint256 endTime;
+        uint256 maxRaise;             // Graduation threshold: raise at which trading moves to Uniswap
         address creator;              // Token creator address
         uint256 protocolFeeBps;       // Protocol fee in basis points (e.g., 250 = 2.5%)
         uint256 liquidityBps;         // Share of the raise seeded into Uniswap at migration
         uint256 lpFeeShareBps;        // Protocol's share of the pool's trading fees
     }
 
-    /// @notice Everything a creator chooses when launching an auction.
+    /// @notice Everything a creator chooses when launching an auction with
+    ///         custom parameters. For a one-click launch see `launch`.
     struct AuctionParams {
         string name;
         string symbol;
+        string metadataURI;           // Off-chain metadata, e.g. the token image
         uint256 maxSupply;            // Token supply cap, in token wei
         address paymentToken;         // e.g. USDC
         uint256 basePrice;            // Price of the first whole token, in payment-token units
         uint256 slope;                // Price rise per whole token sold
-        uint256 maxRaise;             // Sale closes once this much is raised
-        uint256 startTime;
-        uint256 endTime;
+        uint256 maxRaise;             // Graduation threshold: trading moves to Uniswap once raised
         uint256 liquidityBps;         // Share of the raise seeded into Uniswap at migration
+    }
+
+    /// @notice The protocol's standard launch: everything except the name,
+    ///         symbol and metadata, which `launch` takes from the creator.
+    struct LaunchPreset {
+        address paymentToken;
+        uint256 maxSupply;
+        uint256 basePrice;
+        uint256 slope;
+        uint256 maxRaise;
+        uint256 liquidityBps;
     }
 
     struct AuctionData {
@@ -101,6 +110,10 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     ///      callback can be authenticated.
     address private _activePool;
 
+    /// @notice Parameters for one-click launches. Unset (zero payment token)
+    ///         until the owner configures it.
+    LaunchPreset public launchPreset;
+
     // Events — these are what the indexer will listen to
     event AuctionCreated(
         uint256 indexed auctionId,
@@ -110,9 +123,8 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         uint256 basePrice,
         uint256 slope,
         uint256 maxRaise,
-        uint256 startTime,
-        uint256 endTime,
-        uint256 liquidityBps
+        uint256 liquidityBps,
+        string metadataURI
     );
 
     event TokensPurchased(
@@ -120,6 +132,16 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         address indexed buyer,
         uint256 amount,
         uint256 cost,
+        uint256 protocolFee,
+        uint256 newTotalRaised,
+        uint256 newTotalSold
+    );
+
+    event TokensSold(
+        uint256 indexed auctionId,
+        address indexed seller,
+        uint256 amount,
+        uint256 proceeds,
         uint256 protocolFee,
         uint256 newTotalRaised,
         uint256 newTotalSold
@@ -145,6 +167,9 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     event DefaultFeeBpsUpdated(uint256 previous, uint256 current);
     event Swept(address indexed token, address indexed to, uint256 amount);
     event DefaultLpFeeShareBpsUpdated(uint256 previous, uint256 current);
+    event LaunchPresetUpdated(
+        address paymentToken, uint256 maxSupply, uint256 basePrice, uint256 slope, uint256 maxRaise, uint256 liquidityBps
+    );
 
     constructor(address feeRecipient_, uint256 defaultFeeBps_, INonfungiblePositionManager positionManager_)
         Ownable(msg.sender)
@@ -157,15 +182,43 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         defaultFeeBps = defaultFeeBps_;
     }
 
+    /// @notice Launch a token with custom curve parameters. Trading starts
+    ///         immediately; the token graduates to Uniswap once `maxRaise` is
+    ///         raised.
     function createAuction(AuctionParams calldata p) external returns (uint256 auctionId) {
-        require(p.startTime > block.timestamp, "Start must be in future");
-        require(p.endTime > p.startTime, "End must be after start");
+        return _createAuction(p);
+    }
+
+    /// @notice One-click launch: name, symbol and metadata from the creator,
+    ///         everything else from the protocol's standard preset.
+    function launch(string calldata name, string calldata symbol, string calldata metadataURI)
+        external
+        returns (uint256 auctionId)
+    {
+        LaunchPreset memory s = launchPreset;
+        require(s.paymentToken != address(0), "No launch preset");
+        return _createAuction(
+            AuctionParams({
+                name: name,
+                symbol: symbol,
+                metadataURI: metadataURI,
+                maxSupply: s.maxSupply,
+                paymentToken: s.paymentToken,
+                basePrice: s.basePrice,
+                slope: s.slope,
+                maxRaise: s.maxRaise,
+                liquidityBps: s.liquidityBps
+            })
+        );
+    }
+
+    function _createAuction(AuctionParams memory p) internal returns (uint256 auctionId) {
         _validateCurve(p.maxSupply, p.basePrice, p.slope, p.maxRaise, p.liquidityBps);
 
         auctionId = auctionCount++;
 
         // Deploy token — auction contract owns it for minting
-        AuctionToken token = new AuctionToken(p.name, p.symbol, p.maxSupply, address(this));
+        AuctionToken token = new AuctionToken(p.name, p.symbol, p.maxSupply, address(this), p.metadataURI);
 
         // Written field by field: a single struct literal this wide exceeds
         // the EVM stack in the legacy code generator.
@@ -176,8 +229,6 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         config.basePrice = p.basePrice;
         config.slope = p.slope;
         config.maxRaise = p.maxRaise;
-        config.startTime = p.startTime;
-        config.endTime = p.endTime;
         config.creator = msg.sender;
         config.protocolFeeBps = defaultFeeBps;
         config.liquidityBps = p.liquidityBps;
@@ -186,7 +237,7 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
 
         emit AuctionCreated(
             auctionId, msg.sender, address(token), p.paymentToken,
-            p.basePrice, p.slope, p.maxRaise, p.startTime, p.endTime, p.liquidityBps
+            p.basePrice, p.slope, p.maxRaise, p.liquidityBps, p.metadataURI
         );
     }
 
@@ -219,7 +270,8 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         require(soldOut + reserve <= maxSupply, "Supply too small for liquidity");
     }
 
-    /// @notice Buy `amount` tokens (in token wei) from an active auction.
+    /// @notice Buy `amount` tokens (in token wei) from an auction that hasn't
+    ///         graduated yet.
     /// @param maxCost Most the buyer will pay in total (cost + protocol fee), in
     ///        payment-token units. The price rises with every purchase, so a
     ///        quote can be stale by the time a transaction lands; this bound
@@ -231,8 +283,6 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     function buyTokens(uint256 auctionId, uint256 amount, uint256 maxCost) external nonReentrant {
         AuctionData storage auction = auctions[auctionId];
         require(auction.state == AuctionState.ACTIVE, "Auction not active");
-        require(block.timestamp >= auction.config.startTime, "Not started");
-        require(block.timestamp <= auction.config.endTime, "Ended");
         require(amount > 0, "Zero amount");
 
         uint256 cost;
@@ -306,17 +356,42 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         }
     }
 
-    function completeAuction(uint256 auctionId) external {
+    /// @notice Sell `amount` tokens (in token wei) back to the curve of an
+    ///         auction that hasn't graduated yet. The tokens are burned and the
+    ///         seller is paid from the raise, at the curve price minus the
+    ///         protocol fee.
+    /// @param minProceeds Least the seller will accept after the fee. Like
+    ///        `maxCost` on purchases, it protects against the price moving
+    ///        between quote and transaction.
+    function sellTokens(uint256 auctionId, uint256 amount, uint256 minProceeds) external nonReentrant {
         AuctionData storage auction = auctions[auctionId];
-        require(
-            msg.sender == auction.config.creator || msg.sender == owner(),
-            "Not authorized"
-        );
-        require(block.timestamp > auction.config.endTime, "Auction not ended");
-        require(auction.state == AuctionState.ACTIVE, "Not active");
+        require(auction.state == AuctionState.ACTIVE, "Auction not active");
+        require(amount > 0, "Zero amount");
+        // Tokens can't be transferred before migration, so what a holder bought
+        // is exactly what they can sell.
+        require(userPurchases[auctionId][msg.sender] >= amount, "Exceeds balance");
 
-        auction.state = AuctionState.COMPLETED;
-        emit AuctionCompleted(auctionId, auction.totalRaised, auction.totalSold);
+        uint256 proceeds = BondingCurve.calculateSellProceeds(
+            auction.totalSold, amount, auction.config.basePrice, auction.config.slope
+        );
+        uint256 protocolFee = (proceeds * auction.config.protocolFeeBps) / 10000;
+        require(proceeds - protocolFee >= minProceeds, "Slippage exceeded");
+
+        // Effects before interactions.
+        IERC20 payment = auction.config.paymentToken;
+        auction.totalRaised -= proceeds;
+        auction.totalSold -= amount;
+        userPurchases[auctionId][msg.sender] -= amount;
+        custodied[address(payment)] -= proceeds;
+
+        auction.config.token.burnFrom(msg.sender, amount);
+        if (protocolFee > 0) payment.safeTransfer(protocolFeeRecipient, protocolFee);
+        payment.safeTransfer(msg.sender, proceeds - protocolFee);
+
+        emit TokensSold(
+            auctionId, msg.sender, amount, proceeds, protocolFee,
+            auction.totalRaised, auction.totalSold
+        );
     }
 
     /// @notice Transfer an auction's raised payment tokens to its creator.
@@ -400,6 +475,9 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         if (tokensLeft > 0) m.token.burn(tokensLeft);
         uint256 paymentLeft = m.payment.balanceOf(address(this)) - m.paymentFloor;
         if (paymentLeft > 0) m.payment.safeTransfer(auction.config.creator, paymentLeft);
+
+        // Nothing else will ever be minted or burned: fix the supply for good.
+        m.token.renounceOwnership();
     }
 
     /// @dev Mint the full-range position. A failure here must not strand the
@@ -584,6 +662,17 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         require(shareBps <= MAX_LP_FEE_SHARE_BPS, "Share too high");
         emit DefaultLpFeeShareBpsUpdated(defaultLpFeeShareBps, shareBps);
         defaultLpFeeShareBps = shareBps;
+    }
+
+    /// @notice Set the parameters `launch` uses. Applies to launches from now
+    ///         on; existing auctions are unaffected.
+    function setLaunchPreset(LaunchPreset calldata preset) external onlyOwner {
+        require(preset.paymentToken != address(0), "Zero payment token");
+        _validateCurve(preset.maxSupply, preset.basePrice, preset.slope, preset.maxRaise, preset.liquidityBps);
+        launchPreset = preset;
+        emit LaunchPresetUpdated(
+            preset.paymentToken, preset.maxSupply, preset.basePrice, preset.slope, preset.maxRaise, preset.liquidityBps
+        );
     }
 
     /// @notice Recover tokens held above what is owed to auction creators,

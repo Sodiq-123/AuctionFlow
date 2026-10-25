@@ -10,41 +10,80 @@ contract MockUSDC is ERC20 {
     }
 }
 
-/// Migration behaviour that needs no Uniswap deployment. The Uniswap path
-/// itself is covered against real Uniswap v3 in test/fork.
+/// A pool that reports whatever price it was initialised with.
+contract MockPool {
+    uint160 public sqrtPriceX96;
+
+    constructor(uint160 price) {
+        sqrtPriceX96 = price;
+    }
+
+    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
+        return (sqrtPriceX96, 0, 0, 0, 0, 0, true);
+    }
+}
+
+/// Creates pools normally but rejects every position, so migration has to
+/// take its fallback path.
+contract RejectingPositionManager {
+    function createAndInitializePoolIfNecessary(address, address, uint24, uint160 sqrtPriceX96)
+        external
+        returns (address)
+    {
+        return address(new MockPool(sqrtPriceX96));
+    }
+
+    function mint(INonfungiblePositionManager.MintParams calldata)
+        external
+        pure
+        returns (uint256, uint128, uint256, uint256)
+    {
+        revert("position rejected");
+    }
+}
+
+/// Migration behaviour that needs no real Uniswap. The Uniswap path itself is
+/// covered against real Uniswap v3 in test/fork.
 contract TokenAuctionMigrateTest is Test {
     TokenAuction auction;
     MockUSDC usdc;
 
     address creator = makeAddr("creator");
+    address buyer = makeAddr("buyer");
     address stranger = makeAddr("stranger");
 
-    uint256 startTime;
-    uint256 endTime;
+    uint256 constant MAX_RAISE = 10_500_000; // exactly 1,000 tokens at these prices
 
     function setUp() public {
         usdc = new MockUSDC();
-        auction = new TokenAuction(makeAddr("feeRecipient"), 250, INonfungiblePositionManager(makeAddr("positionManager")));
+        auction = new TokenAuction(
+            makeAddr("feeRecipient"), 250, INonfungiblePositionManager(address(new RejectingPositionManager()))
+        );
+        usdc.transfer(buyer, 1_000e6);
     }
 
     function _createAuction() internal returns (uint256 id) {
-        startTime = block.timestamp + 1;
-        endTime = block.timestamp + 72 hours;
         vm.prank(creator);
         id = auction.createAuction(
             TokenAuction.AuctionParams({
                 name: "TestToken",
                 symbol: "TT",
+                metadataURI: "",
                 maxSupply: 1_000_000_000e18,
                 paymentToken: address(usdc),
                 basePrice: 1e4,
                 slope: 1,
-                maxRaise: 10_500_000,
-                startTime: startTime,
-                endTime: endTime,
+                maxRaise: MAX_RAISE,
                 liquidityBps: 5_000
             })
         );
+    }
+
+    function _graduate(uint256 id) internal {
+        vm.startPrank(buyer);
+        usdc.approve(address(auction), type(uint256).max);
+        auction.buyTokens(id, 5_000e18, type(uint256).max); // partially fills to the threshold
+        vm.stopPrank();
     }
 
     function _token(uint256 id) internal view returns (AuctionToken) {
@@ -52,39 +91,62 @@ contract TokenAuctionMigrateTest is Test {
         return cfg.token;
     }
 
-    function test_migrate_revertsWhileActive() public {
+    function test_migrate_revertsBeforeGraduation() public {
         uint256 id = _createAuction();
         vm.expectRevert("Auction not completed");
         auction.migrate(id);
     }
 
-    /// An auction that ended with no buyers has nothing to pair, but still
-    /// migrates: the token unlocks and no pool is created.
-    function test_migrate_withNoRaiseUnlocksWithoutPool() public {
+    /// If Uniswap rejects the position, migration still completes: the token
+    /// unlocks, its supply is fixed, unused tokens are burned and the reserved
+    /// funds go to the creator. Buyers are never left holding locked tokens.
+    function test_migrate_neverStrandsTokensWhenUniswapRejects() public {
         uint256 id = _createAuction();
-        vm.warp(endTime + 1);
-        vm.prank(creator);
-        auction.completeAuction(id);
+        _graduate(id);
+        AuctionToken token = _token(id);
+        uint256 sold = token.totalSupply();
+        uint256 liquidityShare = (MAX_RAISE * 5_000) / 10_000;
 
+        vm.expectEmit(true, false, false, true);
+        emit TokenAuction.AuctionMigrated(id, address(0), 0, 0, 0);
         vm.prank(stranger); // permissionless
         auction.migrate(id);
 
         (, TokenAuction.AuctionState state,,) = auction.auctions(id);
         assertEq(uint256(state), uint256(TokenAuction.AuctionState.MIGRATED));
-        assertTrue(_token(id).transfersEnabled(), "token unlocked");
-        assertEq(auction.poolOf(id), address(0), "no pool");
+        assertTrue(token.transfersEnabled(), "token unlocked");
+        assertEq(token.owner(), address(0), "ownership renounced: supply fixed for good");
+        assertEq(token.totalSupply(), sold, "liquidity tokens minted then burned");
         assertEq(auction.positionId(id), 0, "no position");
+        assertEq(usdc.balanceOf(creator), liquidityShare, "reserved funds returned to the creator");
+        assertEq(auction.custodied(address(usdc)), MAX_RAISE - liquidityShare, "creator's own share still owed");
+
+        vm.prank(buyer);
+        token.transfer(stranger, 1e18); // tradeable
     }
 
     function test_migrate_onlyOnce() public {
         uint256 id = _createAuction();
-        vm.warp(endTime + 1);
-        vm.prank(creator);
-        auction.completeAuction(id);
+        _graduate(id);
         auction.migrate(id);
 
         vm.expectRevert("Auction not completed");
         auction.migrate(id);
+    }
+
+    function test_noMintOrBurnAfterMigration() public {
+        uint256 id = _createAuction();
+        _graduate(id);
+        auction.migrate(id);
+        AuctionToken token = _token(id);
+
+        vm.prank(address(auction));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(auction)));
+        token.mint(stranger, 1);
+
+        vm.prank(address(auction));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(auction)));
+        token.burnFrom(buyer, 1);
     }
 
     function test_swapCallback_rejectsUnauthorizedCaller() public {

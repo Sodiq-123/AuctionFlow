@@ -24,9 +24,6 @@ contract TokenAuctionBuyTest is Test {
     uint256 constant SLOPE = 1e3;
     uint256 constant MAX_RAISE = 50_000e6;
 
-    uint256 startTime;
-    uint256 endTime;
-
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
@@ -36,24 +33,20 @@ contract TokenAuctionBuyTest is Test {
     // --- helpers -------------------------------------------------------------
 
     function _createAuction(uint256 maxRaise) internal returns (uint256 id) {
-        startTime = block.timestamp + 1;
-        endTime = block.timestamp + 72 hours;
         vm.prank(creator);
         id = auction.createAuction(
             TokenAuction.AuctionParams({
                 name: "TestToken",
                 symbol: "TT",
+                metadataURI: "",
                 maxSupply: 1_000_000_000e18,
                 paymentToken: address(usdc),
                 basePrice: BASE_PRICE,
                 slope: SLOPE,
                 maxRaise: maxRaise,
-                startTime: startTime,
-                endTime: endTime,
                 liquidityBps: 5_000
             })
         );
-        vm.warp(startTime);
     }
 
     function _token(uint256 id) internal view returns (AuctionToken) {
@@ -128,42 +121,6 @@ contract TokenAuctionBuyTest is Test {
         assertEq(sold, amount * 2, "sold accumulates both buys");
     }
 
-    function test_buyTokens_revertsBeforeStart() public {
-        vm.prank(creator);
-        uint256 id = auction.createAuction(
-            TokenAuction.AuctionParams({
-                name: "TestToken",
-                symbol: "TT",
-                maxSupply: 1_000_000_000e18,
-                paymentToken: address(usdc),
-                basePrice: BASE_PRICE,
-                slope: SLOPE,
-                maxRaise: MAX_RAISE,
-                startTime: block.timestamp + 1 hours,
-                endTime: block.timestamp + 72 hours,
-                liquidityBps: 5_000
-            })
-        );
-        // no warp — still before startTime
-        vm.startPrank(buyer);
-        usdc.approve(address(auction), type(uint256).max);
-        vm.expectRevert("Not started");
-        auction.buyTokens(id, 1_000e18, type(uint256).max);
-        vm.stopPrank();
-    }
-
-    function test_buyTokens_revertsAfterEnd() public {
-        uint256 id = _createAuction(MAX_RAISE);
-        vm.warp(endTime + 1);
-        vm.startPrank(buyer);
-        usdc.approve(address(auction), type(uint256).max);
-        vm.expectRevert("Ended");
-        auction.buyTokens(id, 1_000e18, type(uint256).max);
-        vm.stopPrank();
-    }
-
-    /// A purchase that would overshoot the cap is filled with what the
-    /// remaining budget buys, and closes the auction.
     function test_buyTokens_partiallyFillsAtCap() public {
         uint256 cap = 1e6; // 1 USDC: less than 1,000 tokens cost
         uint256 id = _createAuction(cap);

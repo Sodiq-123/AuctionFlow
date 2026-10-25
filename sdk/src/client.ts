@@ -9,11 +9,18 @@ import {
   zeroAddress,
 } from "viem";
 import { AuctionBuilder } from "./builders/auction-builder";
-import { AuctionConfig, AuctionData, BuyQuote, MigrationInfo, SupportedChainId } from "./types";
+import { AuctionConfig, AuctionData, BuyQuote, MigrationInfo, SellQuote, SupportedChainId } from "./types";
 import { AUCTION_ADDRESSES } from "./constants/addresses";
 import { DEFAULT_LIQUIDITY_BPS } from "./constants/protocol";
 import { tokenAuctionAbi } from "./abis/token-auction";
-import { applySlippage, DEFAULT_SLIPPAGE_BPS, fillPurchase, spotPrice } from "./utils/bonding-curve";
+import {
+  applySellSlippage,
+  applySlippage,
+  calculateSellProceeds,
+  DEFAULT_SLIPPAGE_BPS,
+  fillPurchase,
+  spotPrice,
+} from "./utils/bonding-curve";
 import { CHAINS } from "./utils/chains";
 
 /** Shape of the nested tuple returned by the on-chain `auctions(id)` getter. */
@@ -24,8 +31,6 @@ interface RawAuction {
     basePrice: bigint;
     slope: bigint;
     maxRaise: bigint;
-    startTime: bigint;
-    endTime: bigint;
     creator: Address;
     protocolFeeBps: bigint;
     liquidityBps: bigint;
@@ -96,19 +101,77 @@ export class AuctionFlowSDK {
         {
           name: config.name,
           symbol: config.symbol,
+          metadataURI: config.metadataURI ?? "",
           maxSupply: config.maxSupply,
           paymentToken: config.paymentToken,
           basePrice: config.basePrice,
           slope: config.slope,
           maxRaise: config.maxRaise,
-          startTime: config.startTime,
-          endTime: config.endTime,
           liquidityBps: config.liquidityBps ?? BigInt(DEFAULT_LIQUIDITY_BPS),
         },
       ],
     });
 
     return hash;
+  }
+
+  /**
+   * One-click launch: a token with the protocol's standard curve, threshold
+   * and liquidity share. Trading starts immediately.
+   */
+  async launch(name: string, symbol: string, metadataURI = ""): Promise<Hash> {
+    if (!this.walletClient) throw new Error("Wallet client required");
+    return this.walletClient.writeContract({
+      chain: this.chain,
+      account: this.walletClient.account!,
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "launch",
+      args: [name, symbol, metadataURI],
+    });
+  }
+
+  /**
+   * Sell `amount` tokens (in token wei) back to the curve before graduation.
+   * The contract reverts if the price fell below the bound before the
+   * transaction landed: pass `minProceeds` to set it exactly, or `slippageBps`
+   * to derive it from a fresh quote (default 100 = 1% below it).
+   */
+  async sellTokens(
+    auctionId: bigint,
+    amount: bigint,
+    options: { minProceeds?: bigint; slippageBps?: number } = {}
+  ): Promise<Hash> {
+    if (!this.walletClient) throw new Error("Wallet client required");
+
+    const minProceeds =
+      options.minProceeds ??
+      applySellSlippage(
+        (await this.getSellQuote(auctionId, amount)).netProceeds,
+        options.slippageBps ?? DEFAULT_SLIPPAGE_BPS
+      );
+
+    return this.walletClient.writeContract({
+      chain: this.chain,
+      account: this.walletClient.account!,
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "sellTokens",
+      args: [auctionId, amount, minProceeds],
+    });
+  }
+
+  /** What selling `amount` tokens back to the curve would pay right now. */
+  async getSellQuote(auctionId: bigint, amount: bigint): Promise<SellQuote> {
+    const auction = await this.getAuction(auctionId);
+    const proceeds = calculateSellProceeds(auction.totalSold, amount, auction.basePrice, auction.slope);
+    const fee = (proceeds * auction.protocolFeeBps) / 10_000n;
+    return {
+      proceeds,
+      fee,
+      netProceeds: proceeds - fee,
+      spotPriceAfter: spotPrice(auction.totalSold - amount, auction.basePrice, auction.slope),
+    };
   }
 
   /**
@@ -282,8 +345,6 @@ export class AuctionFlowSDK {
       basePrice: raw.config.basePrice,
       slope: raw.config.slope,
       maxRaise: raw.config.maxRaise,
-      startTime: raw.config.startTime,
-      endTime: raw.config.endTime,
       state: raw.state,
       totalRaised: raw.totalRaised,
       totalSold: raw.totalSold,

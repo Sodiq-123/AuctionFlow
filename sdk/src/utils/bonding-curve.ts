@@ -24,6 +24,24 @@ export function calculateBuyCost(
   return linearCost + curveCost;
 }
 
+/**
+ * Proceeds from selling `amount` tokens back to the curve when `currentSupply`
+ * are outstanding. Mirrors BondingCurve.calculateSellProceeds: the same
+ * integral as a purchase, but rounded down, so a round trip never profits.
+ */
+export function calculateSellProceeds(
+  currentSupply: bigint,
+  amount: bigint,
+  basePrice: bigint,
+  slope: bigint
+): bigint {
+  if (amount > currentSupply) throw new Error("Cannot sell more than is outstanding");
+  const from = currentSupply - amount;
+  const linear = (basePrice * amount) / TOKEN_SCALE;
+  const curve = (slope * amount * (2n * from + amount)) / (2n * TOKEN_SCALE * TOKEN_SCALE);
+  return linear + curve;
+}
+
 export function spotPrice(
   currentSupply: bigint,
   basePrice: bigint,
@@ -49,7 +67,7 @@ export function calculateBuyQuote(
   };
 }
 
-/** Default slippage tolerance for `buyTokens`, in basis points (100 = 1%). */
+/** Default slippage tolerance for `buyTokens` and `sellTokens`, in basis points (100 = 1%). */
 export const DEFAULT_SLIPPAGE_BPS = 100;
 
 /**
@@ -111,4 +129,15 @@ export function fillPurchase(
     cost: calculateBuyCost(currentSupply, amount, basePrice, slope),
     fillsAuction: true,
   };
+}
+
+/**
+ * Least a seller will accept for a quoted amount, given a tolerance in basis
+ * points. Rounds down so a tolerance never comes out tighter than asked.
+ */
+export function applySellSlippage(netProceeds: bigint, slippageBps: number): bigint {
+  if (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 10_000) {
+    throw new Error("slippageBps must be an integer between 0 and 10000");
+  }
+  return (netProceeds * BigInt(10_000 - slippageBps)) / 10_000n;
 }

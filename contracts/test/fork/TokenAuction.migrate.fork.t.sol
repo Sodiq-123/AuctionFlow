@@ -92,13 +92,12 @@ abstract contract MigrateForkBase is Test {
             TokenAuction.AuctionParams({
                 name: "Demo",
                 symbol: "DEMO",
+                metadataURI: "ipfs://demo",
                 maxSupply: 1_000_000e18,
                 paymentToken: address(usdc),
                 basePrice: BASE_PRICE,
                 slope: SLOPE,
                 maxRaise: MAX_RAISE,
-                startTime: block.timestamp + 1,
-                endTime: block.timestamp + 1 hours,
                 liquidityBps: LIQUIDITY_BPS
             })
         );
@@ -108,7 +107,6 @@ abstract contract MigrateForkBase is Test {
 
     /// Buys past the cap so the purchase fills the auction and completes it.
     function _fill(uint256 id) internal {
-        vm.warp(block.timestamp + 2);
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
         auction.buyTokens(id, 5_000e18, type(uint256).max);
@@ -186,8 +184,9 @@ abstract contract MigrateForkBase is Test {
         assertLe(poolUsdc, liquidityShare);
         assertEq(poolUsdc + (usdc.balanceOf(creator) - creatorBefore), liquidityShare, "dust refunded to creator");
 
-        // Unused tokens were burned and the token is tradeable.
+        // Unused tokens were burned, the supply is fixed, and the token is tradeable.
         assertEq(token.balanceOf(address(auction)), 0, "leftover tokens burned");
+        assertEq(token.owner(), address(0), "ownership renounced");
         assertTrue(token.transfersEnabled());
         vm.prank(buyer);
         token.transfer(attacker, 1e18);

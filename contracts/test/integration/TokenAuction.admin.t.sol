@@ -42,9 +42,6 @@ contract TokenAuctionAdminTest is Test {
     uint256 constant SLOPE = 1e3;
     uint256 constant MAX_RAISE = 50_000e6;
 
-    uint256 startTime;
-    uint256 endTime;
-
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
@@ -52,24 +49,20 @@ contract TokenAuctionAdminTest is Test {
     }
 
     function _createAuction(address paymentToken, uint256 maxRaise) internal returns (uint256 id) {
-        startTime = block.timestamp + 1;
-        endTime = block.timestamp + 72 hours;
         vm.prank(creator);
         id = auction.createAuction(
             TokenAuction.AuctionParams({
                 name: "TestToken",
                 symbol: "TT",
+                metadataURI: "",
                 maxSupply: 1_000_000_000e18,
                 paymentToken: paymentToken,
                 basePrice: BASE_PRICE,
                 slope: SLOPE,
                 maxRaise: maxRaise,
-                startTime: startTime,
-                endTime: endTime,
                 liquidityBps: 5_000
             })
         );
-        vm.warp(startTime);
     }
 
     function _buy(uint256 id, uint256 amount) internal {
@@ -151,14 +144,11 @@ contract TokenAuctionAdminTest is Test {
     // --- custody + sweep ----------------------------------------------------
 
     function test_custodied_tracksRaisedAndWithdrawn() public {
-        uint256 id = _createAuction(address(usdc), MAX_RAISE);
-        _buy(id, 1_000e18);
         uint256 cost = BondingCurve.calculateBuyCost(0, 1_000e18, BASE_PRICE, SLOPE);
+        uint256 id = _createAuction(address(usdc), cost); // the purchase graduates it
+        _buy(id, 1_000e18);
         assertEq(auction.custodied(address(usdc)), cost);
 
-        vm.warp(endTime + 1);
-        vm.prank(creator);
-        auction.completeAuction(id);
         vm.prank(creator);
         auction.withdrawProceeds(id);
         // The liquidity share stays owed until migration moves it into the pool.
@@ -177,7 +167,8 @@ contract TokenAuctionAdminTest is Test {
     }
 
     function test_sweep_neverTouchesCreatorFunds() public {
-        uint256 id = _createAuction(address(usdc), MAX_RAISE);
+        uint256 cost = BondingCurve.calculateBuyCost(0, 1_000e18, BASE_PRICE, SLOPE);
+        uint256 id = _createAuction(address(usdc), cost); // the purchase graduates it
         _buy(id, 1_000e18);
         uint256 owed = auction.custodied(address(usdc));
         usdc.transfer(address(auction), 20e6);
@@ -187,11 +178,8 @@ contract TokenAuctionAdminTest is Test {
         assertEq(usdc.balanceOf(address(auction)), owed, "creator funds intact");
 
         // The creator can still withdraw in full afterwards.
-        vm.warp(endTime + 1);
-        vm.startPrank(creator);
-        auction.completeAuction(id);
+        vm.prank(creator);
         auction.withdrawProceeds(id);
-        vm.stopPrank();
         assertEq(usdc.balanceOf(creator), owed - (owed * 5_000) / 10_000, "creator's share, liquidity still reserved");
     }
 

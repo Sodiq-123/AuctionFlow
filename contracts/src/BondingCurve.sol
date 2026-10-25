@@ -37,6 +37,26 @@ library BondingCurve {
         return linearCost + curveCost;
     }
 
+    /// @notice Proceeds from selling `amount` tokens back to the curve when
+    ///         `currentSupply` tokens are outstanding: the same integral as a
+    ///         purchase, taken from `currentSupply - amount` up to
+    ///         `currentSupply`.
+    /// @dev    Rounds both terms down, the mirror image of calculateBuyCost.
+    ///         Buys pay at least the exact integral and sells receive at most
+    ///         it, so an auction's raise never falls below the exact value of
+    ///         the tokens outstanding and every seller can always be paid.
+    function calculateSellProceeds(
+        uint256 currentSupply,
+        uint256 amount,
+        uint256 basePrice,
+        uint256 slope
+    ) internal pure returns (uint256) {
+        uint256 from = currentSupply - amount;
+        uint256 linear = (basePrice * amount) / TOKEN_SCALE;
+        uint256 curve = (slope * amount * (2 * from + amount)) / (2 * TOKEN_SCALE * TOKEN_SCALE);
+        return linear + curve;
+    }
+
     /// @notice Calculate current spot price at a given supply
     /// @param currentSupply Tokens already sold, in token wei
     /// @return Price of the next whole token, in payment-token units

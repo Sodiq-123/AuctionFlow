@@ -23,6 +23,7 @@ export class AuctionBuilder {
     return this;
   }
 
+  /** Graduation threshold: once this much is raised, trading moves to Uniswap. */
   withMaxRaise(maxRaise: bigint): this {
     this.config.maxRaise = maxRaise;
     return this;
@@ -39,16 +40,16 @@ export class AuctionBuilder {
     return this;
   }
 
-  withSchedule(startTime: bigint, endTime: bigint): this {
-    this.config.startTime = startTime;
-    this.config.endTime = endTime;
+  /** Off-chain metadata for the token, such as its image (e.g. an IPFS URI). */
+  withMetadata(metadataURI: string): this {
+    this.config.metadataURI = metadataURI;
     return this;
   }
 
   build(): AuctionConfig {
     const required: (keyof AuctionConfig)[] = [
       "name", "symbol", "maxSupply", "paymentToken",
-      "basePrice", "slope", "maxRaise", "startTime", "endTime",
+      "basePrice", "slope", "maxRaise",
     ];
 
     for (const key of required) {
@@ -66,9 +67,6 @@ export class AuctionBuilder {
     const liquidityBps = config.liquidityBps!;
     if (liquidityBps < BigInt(MIN_LIQUIDITY_BPS) || liquidityBps > 10_000n) {
       throw new Error(`liquidityBps must be between ${MIN_LIQUIDITY_BPS} and 10000`);
-    }
-    if (config.startTime >= config.endTime) {
-      throw new Error("startTime must be before endTime");
     }
 
     return config;

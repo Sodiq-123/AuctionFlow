@@ -10,7 +10,7 @@ function validBuilder() {
     .withPaymentToken(USDC_SEPOLIA)
     .withBondingCurve(1_000_000n, 1_000n)
     .withMaxRaise(50_000_000n)
-    .withSchedule(1_000n, 2_000n);
+    .withMetadata("ipfs://my-token");
 }
 
 describe("AuctionBuilder", () => {
@@ -24,8 +24,7 @@ describe("AuctionBuilder", () => {
       basePrice: 1_000_000n,
       slope: 1_000n,
       maxRaise: 50_000_000n,
-      startTime: 1_000n,
-      endTime: 2_000n,
+      metadataURI: "ipfs://my-token",
     });
   });
 
@@ -33,12 +32,6 @@ describe("AuctionBuilder", () => {
     expect(() =>
       new AuctionBuilder().withToken("MyToken", "MTK", 1_000_000n).build()
     ).toThrow(/Missing required field/);
-  });
-
-  it("rejects a schedule where startTime is not before endTime", () => {
-    expect(() => validBuilder().withSchedule(2_000n, 1_000n).build()).toThrow(
-      /startTime must be before endTime/
-    );
   });
 
   it("defaults the liquidity share to 50%", () => {

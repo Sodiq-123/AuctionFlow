@@ -6,6 +6,8 @@ import {
   applySlippage,
   maxBuyable,
   fillPurchase,
+  calculateSellProceeds,
+  applySellSlippage,
 } from "../../src/utils/bonding-curve";
 
 const T = 10n ** 18n;
@@ -120,5 +122,49 @@ describe("fillPurchase", () => {
 
   it("throws when nothing is left to buy", () => {
     expect(() => fillPurchase(0n, T, BASE, SLOPE, 10_500_000n, 10_500_000n)).toThrow(/sold out/);
+  });
+});
+
+describe("calculateSellProceeds", () => {
+  const BASE = 10_000n;
+  const SLOPE = 1n;
+
+  it("pays the same integral a purchase costs, when there is no remainder", () => {
+    // Buying 1,000 from 0 costs exactly 10.5 USDC; selling them back pays it.
+    expect(calculateBuyCost(0n, 1000n * T, BASE, SLOPE)).toBe(10_500_000n);
+    expect(calculateSellProceeds(1000n * T, 1000n * T, BASE, SLOPE)).toBe(10_500_000n);
+  });
+
+  it("rounds down, so a round trip never profits", () => {
+    for (const amount of [1n, 7n, 12_345n, T + 3n, 333n * T + 1n]) {
+      const cost = calculateBuyCost(0n, amount, BASE, SLOPE);
+      const proceeds = calculateSellProceeds(amount, amount, BASE, SLOPE);
+      expect(proceeds).toBeLessThanOrEqual(cost);
+    }
+  });
+
+  it("walks the curve down from the current supply", () => {
+    // Selling the top 400 of 1,000 pays for tokens 600..1,000, the expensive end.
+    const top = calculateSellProceeds(1000n * T, 400n * T, BASE, SLOPE);
+    const bottom = calculateSellProceeds(400n * T, 400n * T, BASE, SLOPE);
+    expect(top).toBeGreaterThan(bottom);
+  });
+
+  it("refuses to sell more than is outstanding", () => {
+    expect(() => calculateSellProceeds(T, 2n * T, BASE, SLOPE)).toThrow(/outstanding/);
+  });
+});
+
+describe("applySellSlippage", () => {
+  it("lowers the minimum by the tolerance", () => {
+    expect(applySellSlippage(10_000_000n, 100)).toBe(9_900_000n); // -1%
+  });
+
+  it("rounds down so the bound is never tighter than requested", () => {
+    expect(applySellSlippage(1n, 1)).toBe(0n);
+  });
+
+  it("rejects tolerances outside 0..10000 bps", () => {
+    expect(() => applySellSlippage(1n, 10_001)).toThrow(/slippageBps/);
   });
 });

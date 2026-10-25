@@ -12,7 +12,7 @@ ponder.on("TokenAuction:AuctionCreated", async ({ event, context }) => {
   const { db } = context;
   const {
     auctionId, creator, token, paymentToken,
-    basePrice, slope, maxRaise, startTime, endTime, liquidityBps,
+    basePrice, slope, maxRaise, liquidityBps, metadataURI,
   } = event.args;
 
   const id = auctionId.toString();
@@ -26,8 +26,7 @@ ponder.on("TokenAuction:AuctionCreated", async ({ event, context }) => {
     basePrice,
     slope,
     maxRaise,
-    startTime,
-    endTime,
+    metadataUri: metadataURI,
     liquidityBps,
     state: "ACTIVE",
     totalRaised: 0n,
@@ -63,34 +62,43 @@ ponder.on("TokenAuction:AuctionCreated", async ({ event, context }) => {
     }));
 });
 
-// ─── TokensPurchased ───
+// ─── Trades: TokensPurchased and TokensSold ───
 
-ponder.on("TokenAuction:TokensPurchased", async ({ event, context }) => {
+type TradeArgs = {
+  side: "BUY" | "SELL";
+  auctionId: bigint;
+  trader: `0x${string}`;
+  amount: bigint;
+  value: bigint; // cost of a buy, proceeds of a sell, before the fee
+  protocolFee: bigint;
+  newTotalRaised: bigint;
+  newTotalSold: bigint;
+};
+
+// Both sides move the price along the same curve, so one function records
+// the trade, the auction's new totals, the holder and the price snapshot.
+async function recordTrade({ event, context }: any, t: TradeArgs) {
   const { db } = context;
-  const {
-    auctionId: rawAuctionId, buyer, amount, cost,
-    protocolFee, newTotalRaised, newTotalSold,
-  } = event.args;
-
-  const auctionId = rawAuctionId.toString();
-  const purchaseId = `${event.transaction.hash}-${event.log.logIndex}`;
-  const participantId = `${auctionId}-${buyer}`;
+  const auctionId = t.auctionId.toString();
+  const tradeId = `${event.transaction.hash}-${event.log.logIndex}`;
+  const isBuy = t.side === "BUY";
 
   const auctionRecord = await db.find(schema.auction, { id: auctionId });
   const newPrice = auctionRecord
-    ? auctionRecord.basePrice + (auctionRecord.slope * newTotalSold) / TOKEN_SCALE
+    ? auctionRecord.basePrice + (auctionRecord.slope * t.newTotalSold) / TOKEN_SCALE
     : 0n;
 
-  // Average price paid per whole token, in payment-token units.
-  const pricePerToken = amount > 0n ? (cost * TOKEN_SCALE) / amount : 0n;
+  // Average price per whole token for this trade, in payment-token units.
+  const pricePerToken = t.amount > 0n ? (t.value * TOKEN_SCALE) / t.amount : 0n;
 
-  await db.insert(schema.purchase).values({
-    id: purchaseId,
+  await db.insert(schema.trade).values({
+    id: tradeId,
     auctionId,
-    buyer,
-    amount,
-    cost,
-    protocolFee,
+    trader: t.trader,
+    side: t.side,
+    amount: t.amount,
+    value: t.value,
+    protocolFee: t.protocolFee,
     pricePerToken,
     timestamp: event.block.timestamp,
     transactionHash: event.transaction.hash,
@@ -99,47 +107,84 @@ ponder.on("TokenAuction:TokensPurchased", async ({ event, context }) => {
 
   await db
     .update(schema.auction, { id: auctionId })
-    .set({
-      totalRaised: newTotalRaised,
-      totalSold: newTotalSold,
-      currentPrice: newPrice,
-    });
+    .set({ totalRaised: t.newTotalRaised, totalSold: t.newTotalSold, currentPrice: newPrice });
 
   await db
     .insert(schema.participant)
     .values({
-      id: participantId,
+      id: `${auctionId}-${t.trader}`,
       auctionId,
-      address: buyer,
-      totalPurchased: amount,
-      totalSpent: cost,
-      purchaseCount: 1,
-      firstPurchaseAt: event.block.timestamp,
-      lastPurchaseAt: event.block.timestamp,
+      address: t.trader,
+      totalPurchased: isBuy ? t.amount : 0n,
+      totalSpent: isBuy ? t.value : 0n,
+      purchaseCount: isBuy ? 1 : 0,
+      totalSoldBack: isBuy ? 0n : t.amount,
+      totalProceeds: isBuy ? 0n : t.value,
+      sellCount: isBuy ? 0 : 1,
+      firstTradeAt: event.block.timestamp,
+      lastTradeAt: event.block.timestamp,
     })
-    .onConflictDoUpdate((row) => ({
-      totalPurchased: row.totalPurchased + amount,
-      totalSpent: row.totalSpent + cost,
-      purchaseCount: row.purchaseCount + 1,
-      lastPurchaseAt: event.block.timestamp,
-    }));
+    .onConflictDoUpdate((row: any) =>
+      isBuy
+        ? {
+            totalPurchased: row.totalPurchased + t.amount,
+            totalSpent: row.totalSpent + t.value,
+            purchaseCount: row.purchaseCount + 1,
+            lastTradeAt: event.block.timestamp,
+          }
+        : {
+            totalSoldBack: row.totalSoldBack + t.amount,
+            totalProceeds: row.totalProceeds + t.value,
+            sellCount: row.sellCount + 1,
+            lastTradeAt: event.block.timestamp,
+          }
+    );
 
   await db.insert(schema.priceSnapshot).values({
-    id: purchaseId,
+    id: tradeId,
     auctionId,
     price: newPrice,
-    totalSold: newTotalSold,
-    totalRaised: newTotalRaised,
+    totalSold: t.newTotalSold,
+    totalRaised: t.newTotalRaised,
     timestamp: event.block.timestamp,
     blockNumber: event.block.number,
   });
 
   await db
     .update(schema.protocolMetrics, { id: "global" })
-    .set((row) => ({
-      totalVolumeRaised: row.totalVolumeRaised + cost,
-      totalFeesCollected: row.totalFeesCollected + protocolFee,
+    .set((row: any) => ({
+      totalVolumeRaised: row.totalVolumeRaised + (isBuy ? t.value : 0n),
+      totalSellVolume: row.totalSellVolume + (isBuy ? 0n : t.value),
+      totalFeesCollected: row.totalFeesCollected + t.protocolFee,
     }));
+}
+
+ponder.on("TokenAuction:TokensPurchased", async (ctx) => {
+  const a = ctx.event.args;
+  await recordTrade(ctx, {
+    side: "BUY",
+    auctionId: a.auctionId,
+    trader: a.buyer,
+    amount: a.amount,
+    value: a.cost,
+    protocolFee: a.protocolFee,
+    newTotalRaised: a.newTotalRaised,
+    newTotalSold: a.newTotalSold,
+  });
+});
+
+ponder.on("TokenAuction:TokensSold", async (ctx) => {
+  const a = ctx.event.args;
+  await recordTrade(ctx, {
+    side: "SELL",
+    auctionId: a.auctionId,
+    trader: a.seller,
+    amount: a.amount,
+    value: a.proceeds,
+    protocolFee: a.protocolFee,
+    newTotalRaised: a.newTotalRaised,
+    newTotalSold: a.newTotalSold,
+  });
 });
 
 // ─── AuctionCompleted ───

@@ -2,6 +2,7 @@ pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
 import "../../src/TokenAuction.sol";
+import "../../src/BondingCurve.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract MockUSDC is ERC20 {
@@ -14,14 +15,14 @@ contract MockUSDC is ERC20 {
 
 /// @dev Drives randomized buys against a single live auction so the fuzzer can
 ///      probe for state that violates the protocol's accounting invariants.
-contract BuyHandler is Test {
+contract TradeHandler is Test {
     TokenAuction public auction;
     MockUSDC public usdc;
     uint256 public auctionId;
 
     address[] public actors;
     address public owner;
-    uint256 public ghostSold;    // tokens buyers actually received
+    uint256 public ghostSold;    // tokens outstanding: received by buyers, minus sold back
     uint256 public ghostDonated; // payment tokens sent to the auction directly
     uint256 public ghostSwept;   // payment tokens the owner recovered
 
@@ -58,6 +59,22 @@ contract BuyHandler is Test {
         }
     }
 
+    /// Sell part or all of an actor's holding back to the curve.
+    function sell(uint256 actorSeed, uint256 amount) external {
+        address actor = actors[actorSeed % actors.length];
+        (TokenAuction.AuctionConfig memory cfg,,,) = auction.auctions(auctionId);
+        uint256 held = cfg.token.balanceOf(actor);
+        if (held == 0) return;
+        amount = bound(amount, 1, held);
+
+        vm.prank(actor);
+        try auction.sellTokens(auctionId, amount, 0) {
+            ghostSold -= held - cfg.token.balanceOf(actor);
+        } catch {
+            // Selling after graduation is an expected outcome.
+        }
+    }
+
     /// Someone transfers payment tokens straight to the contract, bypassing
     /// buyTokens: the situation that left 20 USDC stranded on testnet.
     function donate(uint256 actorSeed, uint256 amount) external {
@@ -83,7 +100,7 @@ contract BuyHandler is Test {
 contract TokenAuctionInvariantTest is Test {
     TokenAuction auction;
     MockUSDC usdc;
-    BuyHandler handler;
+    TradeHandler handler;
     uint256 auctionId;
 
     address creator = makeAddr("creator");
@@ -98,31 +115,29 @@ contract TokenAuctionInvariantTest is Test {
         usdc = new MockUSDC();
         auction = new TokenAuction(feeRecipient, 250, INonfungiblePositionManager(makeAddr("positionManager")));
 
-        uint256 startTime = block.timestamp + 1;
         vm.prank(creator);
         auctionId = auction.createAuction(
             TokenAuction.AuctionParams({
                 name: "TestToken",
                 symbol: "TT",
+                metadataURI: "",
                 maxSupply: MAX_SUPPLY,
                 paymentToken: address(usdc),
                 basePrice: BASE_PRICE,
                 slope: SLOPE,
                 maxRaise: MAX_RAISE,
-                startTime: startTime,
-                endTime: block.timestamp + 3650 days,
                 liquidityBps: 5_000
             })
         );
-        vm.warp(startTime);
 
-        handler = new BuyHandler(auction, usdc, auctionId, address(this));
+        handler = new TradeHandler(auction, usdc, auctionId, address(this));
 
         // Only fuzz through the handler's entrypoints.
-        bytes4[] memory selectors = new bytes4[](3);
-        selectors[0] = BuyHandler.buy.selector;
-        selectors[1] = BuyHandler.donate.selector;
-        selectors[2] = BuyHandler.sweep.selector;
+        bytes4[] memory selectors = new bytes4[](4);
+        selectors[0] = TradeHandler.buy.selector;
+        selectors[1] = TradeHandler.sell.selector;
+        selectors[2] = TradeHandler.donate.selector;
+        selectors[3] = TradeHandler.sweep.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
     }
@@ -176,6 +191,14 @@ contract TokenAuctionInvariantTest is Test {
             raised + handler.ghostDonated() - handler.ghostSwept()
         );
         assertLe(handler.ghostSwept(), handler.ghostDonated());
+    }
+
+    /// Everyone can always exit: the raise covers selling every outstanding
+    /// token back to the curve at once. Buys round up and sells round down,
+    /// so the raise never falls below the exact value of what is outstanding.
+    function invariant_raiseCoversFullSellBack() public view {
+        (uint256 raised, uint256 sold) = _totals();
+        assertGe(raised, BondingCurve.calculateSellProceeds(sold, sold, BASE_PRICE, SLOPE));
     }
 
     /// The contract's own accounting must match the handler's independent tally.

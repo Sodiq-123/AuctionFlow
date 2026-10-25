@@ -11,7 +11,7 @@ contract AuctionTokenTest is Test {
     uint256 constant MAX_SUPPLY = 1_000_000e18;
 
     function setUp() public {
-        token = new AuctionToken("Auction Token", "AUCT", MAX_SUPPLY, owner);
+        token = new AuctionToken("Auction Token", "AUCT", MAX_SUPPLY, owner, "ipfs://auct");
     }
 
     function test_metadataAndOwner() public view {
@@ -107,6 +107,39 @@ contract AuctionTokenTest is Test {
         token.enableTransfers();
         vm.expectRevert("Already enabled");
         token.enableTransfers();
+        vm.stopPrank();
+    }
+
+    // --- metadata and burning -------------------------------------------------
+
+    function test_metadataURI_setAtConstruction() public view {
+        assertEq(token.metadataURI(), "ipfs://auct");
+    }
+
+    function test_burnFrom_burnsWhileLocked() public {
+        vm.startPrank(owner);
+        token.mint(alice, 100e18);
+        token.burnFrom(alice, 40e18);
+        vm.stopPrank();
+        assertEq(token.balanceOf(alice), 60e18);
+        assertEq(token.totalSupply(), 60e18);
+    }
+
+    function test_burnFrom_onlyOwner() public {
+        vm.prank(owner);
+        token.mint(alice, 100e18);
+        vm.prank(alice);
+        vm.expectRevert(); // Ownable: caller is not the owner
+        token.burnFrom(alice, 1e18);
+    }
+
+    /// Once trading has moved to Uniswap, holders' tokens can't be burned.
+    function test_burnFrom_disabledAfterUnlock() public {
+        vm.startPrank(owner);
+        token.mint(alice, 100e18);
+        token.enableTransfers();
+        vm.expectRevert("Trading migrated");
+        token.burnFrom(alice, 1e18);
         vm.stopPrank();
     }
 }

@@ -10,8 +10,8 @@ export const auction = onchainTable("auction", (t) => ({
   slope: t.bigint().notNull(),
   maxRaise: t.bigint().notNull(),
   liquidityBps: t.bigint().notNull(),
-  startTime: t.bigint().notNull(),
-  endTime: t.bigint().notNull(),
+  // Off-chain metadata for the token, such as its image.
+  metadataUri: t.text().notNull().default(""),
   state: t.text().notNull(),
   totalRaised: t.bigint().notNull(),
   totalSold: t.bigint().notNull(),
@@ -33,18 +33,21 @@ export const auction = onchainTable("auction", (t) => ({
   transactionHash: t.hex().notNull(),
 }));
 
-export const purchase = onchainTable("purchase", (t) => ({
+// Every buy and sell on the curve: the live trade feed for a token.
+export const trade = onchainTable("trade", (t) => ({
   id: t.text().primaryKey(),
   auctionId: t.text().notNull(),
-  buyer: t.hex().notNull(),
+  trader: t.hex().notNull(),
+  side: t.text().notNull(), // "BUY" | "SELL"
   amount: t.bigint().notNull(),
-  cost: t.bigint().notNull(),
+  // Payment tokens exchanged before the fee: the cost of a buy, the proceeds of a sell.
+  value: t.bigint().notNull(),
   protocolFee: t.bigint().notNull(),
   pricePerToken: t.bigint().notNull(),
   timestamp: t.bigint().notNull(),
   transactionHash: t.hex().notNull(),
   blockNumber: t.bigint().notNull(),
-}));
+}))
 
 export const participant = onchainTable("participant", (t) => ({
   id: t.text().primaryKey(),
@@ -53,8 +56,12 @@ export const participant = onchainTable("participant", (t) => ({
   totalPurchased: t.bigint().notNull(),
   totalSpent: t.bigint().notNull(),
   purchaseCount: t.integer().notNull(),
-  firstPurchaseAt: t.bigint().notNull(),
-  lastPurchaseAt: t.bigint().notNull(),
+  // Tokens sold back to the curve, and the proceeds before fees.
+  totalSoldBack: t.bigint().notNull().default(0n),
+  totalProceeds: t.bigint().notNull().default(0n),
+  sellCount: t.integer().notNull().default(0),
+  firstTradeAt: t.bigint().notNull(),
+  lastTradeAt: t.bigint().notNull(),
 }));
 
 export const priceSnapshot = onchainTable("price_snapshot", (t) => ({
@@ -76,4 +83,6 @@ export const protocolMetrics = onchainTable("protocol_metrics", (t) => ({
   totalFeesCollected: t.bigint().notNull(),
   // Protocol's share of pool trading fees, in the payment token.
   totalLpFeesCollected: t.bigint().notNull().default(0n),
+  // Payment tokens paid out to sellers on the curve, before fees.
+  totalSellVolume: t.bigint().notNull().default(0n),
 }));

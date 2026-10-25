@@ -36,11 +36,8 @@ const sdk = new AuctionFlowSDK({
 async function main() {
   console.log("Creating auction with account:", account.address);
 
-  // Auction starts 5 minutes from now, ends in 3 days
-  const now = BigInt(Math.floor(Date.now() / 1000));
-  const startTime = now + 300n;
-  const endTime = now + 86400n * 3n;
-
+  // Trading starts as soon as the auction is created. It graduates to
+  // Uniswap once the 50k USDC threshold is raised.
   const config = sdk
     .buildAuction()
     .withToken(
@@ -53,8 +50,8 @@ async function main() {
       parseUnits("0.01", 6),     // base price: 0.01 USDC
       parseUnits("0.000001", 6)  // slope
     )
-    .withMaxRaise(parseUnits("50000", 6)) // 50k USDC max
-    .withSchedule(startTime, endTime)
+    .withMaxRaise(parseUnits("50000", 6)) // graduates at 50k USDC raised
+    .withMetadata("ipfs://your-token-metadata")
     .build();
 
   console.log("Auction config:", config);

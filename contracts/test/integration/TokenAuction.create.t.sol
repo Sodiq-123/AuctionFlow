@@ -14,6 +14,7 @@ contract TokenAuctionCreateTest is Test {
     MockUSDC usdc;
     address creator = makeAddr("creator");
     address feeRecipient = makeAddr("feeRecipient");
+    address stranger = makeAddr("stranger");
 
     function setUp() public {
         usdc = new MockUSDC();
@@ -21,46 +22,53 @@ contract TokenAuctionCreateTest is Test {
         usdc.transfer(creator, 10_000 * 1e6);
     }
 
+    function _params() internal view returns (TokenAuction.AuctionParams memory) {
+        return TokenAuction.AuctionParams({
+            name: "TestToken",
+            symbol: "TT",
+            metadataURI: "ipfs://test-token",
+            maxSupply: 1_000_000e18,
+            paymentToken: address(usdc),
+            basePrice: 1e6,
+            slope: 1e3,
+            maxRaise: 50_000e6,
+            liquidityBps: 5_000
+        });
+    }
+
+    function _preset() internal view returns (TokenAuction.LaunchPreset memory) {
+        return TokenAuction.LaunchPreset({
+            paymentToken: address(usdc),
+            maxSupply: 1_000_000_000e18,
+            basePrice: 1e4,
+            slope: 1,
+            maxRaise: 10_500_000,
+            liquidityBps: 8_000
+        });
+    }
+
+    function _expectCreateRevert(TokenAuction.AuctionParams memory p, string memory reason) internal {
+        vm.prank(creator);
+        vm.expectRevert(bytes(reason));
+        auction.createAuction(p);
+    }
+
+    // --- createAuction --------------------------------------------------------
+
     function test_createAuction_emitsEvent() public {
         // Only the indexed topics (auctionId, creator) are checked; the token
         // address is assigned inside createAuction, so data is not matched.
         vm.expectEmit(true, true, false, false);
         emit TokenAuction.AuctionCreated(
-            0, creator, address(0), address(usdc), 1e6, 1e3, 50_000e6,
-            block.timestamp + 1 hours, block.timestamp + 72 hours, 5_000);
-        vm.prank(creator);
-        auction.createAuction(
-            TokenAuction.AuctionParams({
-                name: "TestToken",
-                symbol: "TT",
-                maxSupply: 1_000_000e18,
-                paymentToken: address(usdc),
-                basePrice: 1e6,
-                slope: 1e3,
-                maxRaise: 50_000e6,
-                startTime: block.timestamp + 1 hours,
-                endTime: block.timestamp + 72 hours,
-                liquidityBps: 5_000
-            })
+            0, creator, address(0), address(usdc), 1e6, 1e3, 50_000e6, 5_000, "ipfs://test-token"
         );
+        vm.prank(creator);
+        auction.createAuction(_params());
     }
 
     function test_createAuction_incrementsIdAndStoresConfig() public {
         vm.prank(creator);
-        uint256 id = auction.createAuction(
-            TokenAuction.AuctionParams({
-                name: "TestToken",
-                symbol: "TT",
-                maxSupply: 1_000_000e18,
-                paymentToken: address(usdc),
-                basePrice: 1e6,
-                slope: 1e3,
-                maxRaise: 50_000e6,
-                startTime: block.timestamp + 1 hours,
-                endTime: block.timestamp + 72 hours,
-                liquidityBps: 5_000
-            })
-        );
+        uint256 id = auction.createAuction(_params());
         assertEq(id, 0, "first auction id is 0");
         assertEq(auction.auctionCount(), 1, "count incremented");
 
@@ -75,72 +83,66 @@ contract TokenAuctionCreateTest is Test {
         assertEq(address(cfg.paymentToken), address(usdc), "payment token stored");
         assertEq(cfg.basePrice, 1e6);
         assertEq(cfg.protocolFeeBps, 250, "inherits default fee");
-        assertEq(uint256(state), uint256(TokenAuction.AuctionState.ACTIVE), "starts active");
+        assertEq(uint256(state), uint256(TokenAuction.AuctionState.ACTIVE), "trading starts immediately");
         assertEq(raised, 0);
         assertEq(sold, 0);
     }
 
-    function test_createAuction_revertsWhenStartInPast() public {
-        vm.warp(1000);
+    function test_createAuction_storesMetadataOnToken() public {
         vm.prank(creator);
-        vm.expectRevert("Start must be in future");
-        auction.createAuction(
-            TokenAuction.AuctionParams({
-                name: "TestToken",
-                symbol: "TT",
-                maxSupply: 1_000_000e18,
-                paymentToken: address(usdc),
-                basePrice: 1e6,
-                slope: 1e3,
-                maxRaise: 50_000e6,
-                startTime: block.timestamp - 1,
-                endTime: block.timestamp + 72 hours,
-                liquidityBps: 5_000
-            })
-        );
+        uint256 id = auction.createAuction(_params());
+        (TokenAuction.AuctionConfig memory cfg,,,) = auction.auctions(id);
+        assertEq(cfg.token.metadataURI(), "ipfs://test-token");
+        assertEq(cfg.token.owner(), address(auction), "auction contract owns the token until migration");
     }
 
-    function test_createAuction_revertsWhenEndBeforeStart() public {
+    // --- one-click launch -----------------------------------------------------
+
+    function test_launch_revertsWithoutPreset() public {
         vm.prank(creator);
-        vm.expectRevert("End must be after start");
-        auction.createAuction(
-            TokenAuction.AuctionParams({
-                name: "TestToken",
-                symbol: "TT",
-                maxSupply: 1_000_000e18,
-                paymentToken: address(usdc),
-                basePrice: 1e6,
-                slope: 1e3,
-                maxRaise: 50_000e6,
-                startTime: block.timestamp + 72 hours,
-                endTime: block.timestamp + 1 hours,
-                liquidityBps: 5_000
-            })
-        );
+        vm.expectRevert("No launch preset");
+        auction.launch("Meme", "MEME", "ipfs://meme");
+    }
+
+    function test_launch_usesPresetAndCreatorDetails() public {
+        auction.setLaunchPreset(_preset());
+
+        vm.prank(creator);
+        uint256 id = auction.launch("Meme", "MEME", "ipfs://meme");
+
+        (TokenAuction.AuctionConfig memory cfg, TokenAuction.AuctionState state,,) = auction.auctions(id);
+        assertEq(cfg.creator, creator, "launcher is the creator");
+        assertEq(cfg.token.name(), "Meme");
+        assertEq(cfg.token.symbol(), "MEME");
+        assertEq(cfg.token.metadataURI(), "ipfs://meme");
+        assertEq(cfg.token.maxSupply(), 1_000_000_000e18, "supply from preset");
+        assertEq(address(cfg.paymentToken), address(usdc), "payment token from preset");
+        assertEq(cfg.basePrice, 1e4);
+        assertEq(cfg.maxRaise, 10_500_000);
+        assertEq(cfg.liquidityBps, 8_000);
+        assertEq(uint256(state), uint256(TokenAuction.AuctionState.ACTIVE));
+    }
+
+    function test_setLaunchPreset_onlyOwner() public {
+        TokenAuction.LaunchPreset memory preset = _preset();
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        auction.setLaunchPreset(preset);
+    }
+
+    function test_setLaunchPreset_validatesLikeCreateAuction() public {
+        TokenAuction.LaunchPreset memory preset = _preset();
+        preset.liquidityBps = auction.MIN_LIQUIDITY_BPS() - 1;
+        vm.expectRevert("Invalid liquidity share");
+        auction.setLaunchPreset(preset);
+
+        preset = _preset();
+        preset.paymentToken = address(0);
+        vm.expectRevert("Zero payment token");
+        auction.setLaunchPreset(preset);
     }
 
     // --- parameter validation ----------------------------------------------
-
-    function _params() internal view returns (TokenAuction.AuctionParams memory) {
-        return TokenAuction.AuctionParams({
-            name: "TestToken",
-            symbol: "TT",
-            maxSupply: 1_000_000e18,
-            paymentToken: address(usdc),
-            basePrice: 1e6,
-            slope: 1e3,
-            maxRaise: 50_000e6,
-            startTime: block.timestamp + 1 hours,
-            endTime: block.timestamp + 72 hours,
-            liquidityBps: 5_000
-        });
-    }
-
-    function _expectCreateRevert(TokenAuction.AuctionParams memory p, string memory reason) internal {
-        vm.prank(creator);
-        vm.expectRevert(bytes(reason));
-        auction.createAuction(p);
-    }
 
     function test_createAuction_storesLiquidityShare() public {
         TokenAuction.AuctionParams memory p = _params();

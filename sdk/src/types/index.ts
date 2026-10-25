@@ -14,9 +14,10 @@ export interface AuctionConfig {
   paymentToken: Address;
   basePrice: bigint;
   slope: bigint;
+  /** Graduation threshold: once this much is raised, trading moves to Uniswap. */
   maxRaise: bigint;
-  startTime: bigint;
-  endTime: bigint;
+  /** Off-chain metadata for the token, such as its image (e.g. an IPFS URI). */
+  metadataURI?: string;
   /**
    * Share of the raise seeded into Uniswap at migration, in basis points
    * (2000..10000). Defaults to 5000 (50%).
@@ -32,8 +33,6 @@ export interface AuctionData {
   basePrice: bigint;
   slope: bigint;
   maxRaise: bigint;
-  startTime: bigint;
-  endTime: bigint;
   state: AuctionState;
   totalRaised: bigint;
   totalSold: bigint;
@@ -41,6 +40,15 @@ export interface AuctionData {
   liquidityBps: bigint;
   /** Protocol's share of the Uniswap pool's trading fees, in basis points. */
   lpFeeShareBps: bigint;
+}
+
+export interface SellQuote {
+  /** Curve value of the tokens being sold, before the protocol fee. */
+  proceeds: bigint;
+  fee: bigint;
+  /** What the seller receives: proceeds minus fee. */
+  netProceeds: bigint;
+  spotPriceAfter: bigint;
 }
 
 export interface MigrationInfo {

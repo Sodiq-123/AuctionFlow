@@ -25,34 +25,27 @@ contract TokenAuctionWithdrawTest is Test {
     uint256 constant SLOPE = 1e3;
     uint256 constant MAX_RAISE = 50_000e6;
 
-    uint256 startTime;
-    uint256 endTime;
-
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
         usdc.transfer(buyer, 10_000_000 * 1e6);
     }
 
-    function _createAuction(uint256 maxRaise) internal returns (uint256 id) {
-        startTime = block.timestamp + 1;
-        endTime = block.timestamp + 72 hours;
+    function _createAuction(string memory symbol) internal returns (uint256 id) {
         vm.prank(creator);
         id = auction.createAuction(
             TokenAuction.AuctionParams({
                 name: "TestToken",
-                symbol: "TT",
+                symbol: symbol,
+                metadataURI: "",
                 maxSupply: 1_000_000_000e18,
                 paymentToken: address(usdc),
                 basePrice: BASE_PRICE,
                 slope: SLOPE,
-                maxRaise: maxRaise,
-                startTime: startTime,
-                endTime: endTime,
+                maxRaise: MAX_RAISE,
                 liquidityBps: 5_000
             })
         );
-        vm.warp(startTime);
     }
 
     function _buy(uint256 id, uint256 amount) internal {
@@ -60,6 +53,14 @@ contract TokenAuctionWithdrawTest is Test {
         usdc.approve(address(auction), type(uint256).max);
         auction.buyTokens(id, amount, type(uint256).max);
         vm.stopPrank();
+    }
+
+    /// Buy far more than the threshold allows: the purchase partially fills
+    /// up to `maxRaise` and graduates the auction.
+    function _graduate(uint256 id) internal {
+        _buy(id, 1_000_000e18);
+        (, TokenAuction.AuctionState state,,) = auction.auctions(id);
+        assertEq(uint256(state), uint256(TokenAuction.AuctionState.COMPLETED), "graduated");
     }
 
     function _raised(uint256 id) internal view returns (uint256 raised) {
@@ -74,16 +75,12 @@ contract TokenAuctionWithdrawTest is Test {
 
     // --- happy path ----------------------------------------------------------
 
-    function test_withdrawProceeds_paysCreatorAfterCompletion() public {
-        uint256 id = _createAuction(MAX_RAISE);
-        _buy(id, 1_000e18);
+    function test_withdrawProceeds_paysCreatorAfterGraduation() public {
+        uint256 id = _createAuction("TT");
+        _graduate(id);
         uint256 raised = _raised(id);
-        assertGt(raised, 0, "auction raised funds");
+        assertEq(raised, MAX_RAISE, "raised exactly the threshold");
         assertEq(usdc.balanceOf(address(auction)), raised, "contract custodies proceeds");
-
-        vm.warp(endTime + 1);
-        vm.prank(creator);
-        auction.completeAuction(id);
 
         uint256 before = usdc.balanceOf(creator);
         vm.expectEmit(true, true, false, true);
@@ -99,33 +96,21 @@ contract TokenAuctionWithdrawTest is Test {
         assertTrue(auction.proceedsWithdrawn(id), "withdrawn flag set");
     }
 
-    function test_withdrawProceeds_worksAfterAutoCompletion() public {
-        uint256 amount = 1_000e18;
-        uint256 cost = BondingCurve.calculateBuyCost(0, amount, BASE_PRICE, SLOPE);
-        uint256 id = _createAuction(cost); // maxRaise == one buy, auto-completes
-        _buy(id, amount);
-
-        vm.prank(creator);
-        auction.withdrawProceeds(id);
-        assertEq(usdc.balanceOf(creator), _creatorShare(cost), "creator paid out without completeAuction");
-    }
-
     // --- guards --------------------------------------------------------------
 
     function test_withdrawProceeds_revertsForNonCreator() public {
-        uint256 id = _createAuction(MAX_RAISE);
-        _buy(id, 1_000e18);
-        vm.warp(endTime + 1);
-        vm.prank(creator);
-        auction.completeAuction(id);
+        uint256 id = _createAuction("TT");
+        _graduate(id);
 
         vm.prank(stranger);
         vm.expectRevert("Not creator");
         auction.withdrawProceeds(id);
     }
 
-    function test_withdrawProceeds_revertsWhileAuctionActive() public {
-        uint256 id = _createAuction(MAX_RAISE);
+    /// Before graduation the raise isn't final: holders can still sell back
+    /// into it.
+    function test_withdrawProceeds_revertsBeforeGraduation() public {
+        uint256 id = _createAuction("TT");
         _buy(id, 1_000e18);
 
         vm.prank(creator);
@@ -134,11 +119,8 @@ contract TokenAuctionWithdrawTest is Test {
     }
 
     function test_withdrawProceeds_revertsOnSecondWithdrawal() public {
-        uint256 id = _createAuction(MAX_RAISE);
-        _buy(id, 1_000e18);
-        vm.warp(endTime + 1);
-        vm.prank(creator);
-        auction.completeAuction(id);
+        uint256 id = _createAuction("TT");
+        _graduate(id);
 
         vm.prank(creator);
         auction.withdrawProceeds(id);
@@ -148,48 +130,18 @@ contract TokenAuctionWithdrawTest is Test {
         auction.withdrawProceeds(id);
     }
 
-    function test_withdrawProceeds_revertsWhenNothingRaised() public {
-        uint256 id = _createAuction(MAX_RAISE); // no buys at all
-        vm.warp(endTime + 1);
-        vm.prank(creator);
-        auction.completeAuction(id);
-
-        vm.prank(creator);
-        vm.expectRevert("Nothing to withdraw");
-        auction.withdrawProceeds(id);
-    }
-
     // --- isolation between auctions -----------------------------------------
 
     function test_withdrawProceeds_doesNotTouchOtherAuctionsFunds() public {
-        uint256 first = _createAuction(MAX_RAISE);
-        _buy(first, 1_000e18);
+        uint256 first = _createAuction("ONE");
+        _graduate(first);
         uint256 firstRaised = _raised(first);
 
-        // A second auction from the same creator, also funded.
-        uint256 laterStart = block.timestamp + 1;
-        vm.prank(creator);
-        uint256 second = auction.createAuction(
-            TokenAuction.AuctionParams({
-                name: "Second",
-                symbol: "SEC",
-                maxSupply: 1_000_000_000e18,
-                paymentToken: address(usdc),
-                basePrice: BASE_PRICE,
-                slope: SLOPE,
-                maxRaise: MAX_RAISE,
-                startTime: laterStart,
-                endTime: block.timestamp + 72 hours,
-                liquidityBps: 5_000
-            })
-        );
-        vm.warp(laterStart);
+        // A second auction from the same creator, funded but still trading.
+        uint256 second = _createAuction("TWO");
         _buy(second, 500e18);
         uint256 secondRaised = _raised(second);
 
-        vm.warp(endTime + 1);
-        vm.prank(creator);
-        auction.completeAuction(first);
         vm.prank(creator);
         auction.withdrawProceeds(first);
 

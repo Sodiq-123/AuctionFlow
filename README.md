@@ -1,6 +1,6 @@
 # AuctionFlow
 
-An open-source token price discovery & indexing platform — a TypeScript SDK, Ponder-based blockchain indexer with GraphQL API, and Solidity smart contracts for token auctions via bonding curves on EVM chains.
+An open-source token launchpad for EVM chains: launch a token in one call, trade it on a bonding curve, and graduate it to a Uniswap v3 pool. Built from Solidity contracts, a TypeScript SDK, and a Ponder indexer with a GraphQL API.
 
 [![Contracts](https://github.com/Sodiq-123/AuctionFlow/actions/workflows/contracts-test.yml/badge.svg)](https://github.com/Sodiq-123/AuctionFlow/actions/workflows/contracts-test.yml)
 [![SDK](https://github.com/Sodiq-123/AuctionFlow/actions/workflows/sdk-test.yml/badge.svg)](https://github.com/Sodiq-123/AuctionFlow/actions/workflows/sdk-test.yml)
@@ -138,9 +138,11 @@ Linear bonding curve price discovery. Price = `basePrice + slope × currentSuppl
 
 An auction's life:
 
-1. **Sale.** Buyers purchase along the curve with a slippage bound (`maxCost`). The purchase that reaches `maxRaise` is partially filled and closes the sale. Tokens can't be transferred yet.
-2. **Migration.** Anyone calls `migrate`. A creator-chosen share of the raise (20–100%) is paired with newly minted tokens in a 1% Uniswap v3 pool at the auction's final price, and the position is locked in the contract forever. The token unlocks for trading.
-3. **Payouts.** The creator withdraws the rest of the raise, and collects the pool's trading fees minus the protocol's share.
+1. **Launch.** One call creates the token, either with the protocol's standard preset (`launch(name, symbol, metadataURI)`) or with custom curve parameters (`createAuction`). Trading starts immediately.
+2. **Trading on the curve.** Anyone can buy, and sell back to the curve, with slippage bounds (`maxCost`, `minProceeds`). Buys round up and sells round down, so the contract can always buy back every outstanding token. Tokens can't be transferred until graduation; selling back is how holders exit.
+3. **Graduation.** The purchase that reaches the threshold (`maxRaise`) is partially filled and closes the curve.
+4. **Migration.** Anyone calls `migrate`. A creator-chosen share of the raise (20–100%) is paired with newly minted tokens in a 1% Uniswap v3 pool at the auction's final price, and the position is locked in the contract forever. The token unlocks for trading.
+5. **Payouts.** The creator withdraws the rest of the raise, and collects the pool's trading fees minus the protocol's share.
 
 ```text
 contracts/src/
@@ -207,7 +209,10 @@ const sdk = new AuctionFlowSDK({
   // auctionAddress: "0x..."  // to target your own deployment instead
 });
 
-// Build and create an auction
+// One-click launch with the protocol's standard preset
+await sdk.launch("My Token", "MTK", "ipfs://<metadata-json>");
+
+// ...or choose the curve yourself
 const config = sdk
   .buildAuction()
   .withToken("MyToken", "MTK", parseUnits("1000000", 18))
@@ -216,21 +221,18 @@ const config = sdk
     parseUnits("0.01", 6),      // base price: 0.01 USDC
     parseUnits("0.000001", 6)   // slope
   )
-  .withMaxRaise(parseUnits("50000", 6))
-  .withSchedule(
-    BigInt(Math.floor(Date.now() / 1000) + 3600),
-    BigInt(Math.floor(Date.now() / 1000) + 3600 * 72)
-  )
+  .withMaxRaise(parseUnits("50000", 6)) // graduation threshold
   .build();
+await sdk.createAuction(config);
 
-const hash = await sdk.createAuction(config);
-
-// Get a buy quote (off-chain, no gas)
+// Trade on the curve (quotes are off-chain, no gas)
 const quote = await sdk.getQuote(0n, parseUnits("1000", 18));
 console.log(`Cost: ${quote.totalCost} USDC units (fee: ${quote.fee})`);
+await sdk.buyTokens(0n, parseUnits("1000", 18));
+await sdk.sellTokens(0n, parseUnits("400", 18));
 
-// After the auction completes: open the Uniswap pool, then the creator
-// claims their share of the raise
+// After graduation: open the Uniswap pool, then the creator claims their
+// share of the raise
 await sdk.migrate(0n);
 if (!(await sdk.hasWithdrawnProceeds(0n))) {
   await sdk.withdrawProceeds(0n);
@@ -274,6 +276,20 @@ query ActiveAuctions {
       totalRaised
       maxRaise
       state
+    }
+  }
+}
+
+# Live trade feed for a token: buys and sells on the curve, newest first
+query TradeFeed($id: String!) {
+  trades(where: { auctionId: $id }, orderBy: "timestamp", orderDirection: "desc", limit: 20) {
+    items {
+      side
+      trader
+      amount
+      value
+      pricePerToken
+      timestamp
     }
   }
 }
