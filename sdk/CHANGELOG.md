@@ -1,5 +1,14 @@
 # auctionflow-sdk
 
+## 2.0.1
+
+### Patch Changes
+
+- Base Sepolia now points at `0x24a702F10f17A522B9B5511EC2970EE029195Ee4`. The
+  previous deployment could not migrate cheap tokens to Uniswap: opening the
+  pool overflowed whenever the token sorted after USDC, which includes tokens
+  from the standard launch preset.
+
 ## 2.0.0
 
 ### Major Changes

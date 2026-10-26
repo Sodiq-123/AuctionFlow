@@ -29,7 +29,7 @@ An open-source token launchpad for EVM chains: launch a token in one call, trade
                Base + Base Sepolia
 ```
 
-**Deployed contract (Base Sepolia):** [`0xc6DB1c900FAEB4079281Ecd6Ec538C027cD18c28`](https://sepolia.basescan.org/address/0xc6DB1c900FAEB4079281Ecd6Ec538C027cD18c28)
+**Deployed contract (Base Sepolia):** [`0x24a702F10f17A522B9B5511EC2970EE029195Ee4`](https://sepolia.basescan.org/address/0x24a702F10f17A522B9B5511EC2970EE029195Ee4)
 
 ---
 
