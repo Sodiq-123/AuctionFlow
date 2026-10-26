@@ -134,9 +134,12 @@ abstract contract MigrateForkBase is Test {
     /// `price` is payment units per whole token × 1e18, so payment wei per
     /// token wei is price / 1e36.
     function _sqrtPriceX96(uint256 price, bool tokenIsToken0) internal pure returns (uint160) {
-        uint256 ratioX192 =
-            tokenIsToken0 ? Math.mulDiv(price, 1 << 192, 1e36) : Math.mulDiv(1e36, 1 << 192, price);
-        return uint160(Math.sqrt(ratioX192));
+        (uint256 num, uint256 den) = tokenIsToken0 ? (price, uint256(1e36)) : (uint256(1e36), price);
+        return uint160(
+            num / den < (1 << 64)
+                ? Math.sqrt(Math.mulDiv(num, 1 << 192, den))
+                : Math.sqrt(Math.mulDiv(num, 1 << 64, den)) << 64
+        );
     }
 
     /// The pool's price, as payment units per whole auction token × 1e18.
@@ -196,6 +199,39 @@ abstract contract MigrateForkBase is Test {
         // The creator's share stays custodied until withdrawn.
         assertEq(usdc.balanceOf(address(auction)), raised - liquidityShare);
         assertEq(auction.custodied(address(usdc)), raised - liquidityShare);
+    }
+
+    /// The standard launch preset on Base Sepolia: a billion tokens that
+    /// graduate at 10 USDC near 0.00000003 USDC each. That price once
+    /// overflowed the pool price encoding whenever the token was token1.
+    function test_migrate_cheapStandardLaunch() public {
+        auction.setLaunchPreset(
+            TokenAuction.LaunchPreset({
+                paymentToken: address(usdc),
+                maxSupply: 1_000_000_000e18,
+                basePrice: 2e15,
+                slope: 4e7,
+                maxRaise: 10e6,
+                liquidityBps: 8_000
+            })
+        );
+        vm.prank(creator);
+        uint256 id = auction.launch("Cheap", "CHEAP", "ipfs://cheap");
+        vm.startPrank(buyer);
+        usdc.approve(address(auction), type(uint256).max);
+        auction.buyTokens(id, 1_000_000_000e18, type(uint256).max); // fills to the threshold
+        vm.stopPrank();
+
+        (TokenAuction.AuctionConfig memory cfg,,,) = auction.auctions(id);
+        uint256 price = _spot(id);
+        auction.migrate(id);
+
+        address pool = auction.poolOf(id);
+        assertTrue(pool != address(0) && auction.positionId(id) != 0, "pool and position recorded");
+        (uint160 sqrtP,,,,,,) = IUniswapV3Pool(pool).slot0();
+        assertEq(sqrtP, _sqrtPriceX96(price, _tokenIsToken0(cfg.token)), "pool opens at the final price");
+        assertApproxEqAbs(usdc.balanceOf(pool), 8e6, 1, "80% of the raise is in the pool");
+        assertLe(cfg.token.totalSupply(), 1_000_000_000e18);
     }
 
     function test_withdrawProceeds_beforeOrAfterMigration() public {

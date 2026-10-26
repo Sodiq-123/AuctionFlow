@@ -630,11 +630,17 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     ///      price opens the pool at the curve's exact final price: rounding to
     ///      whole payment units could open it below, the direction that sells
     ///      the locked liquidity cheaply.
+    ///
+    ///      The ratio times 2^192 only fits in 256 bits while the ratio is
+    ///      below 2^64. A cheap token paired as token1 (USDC's low address
+    ///      sorts first) easily passes that: at 0.00000003 USDC per token the
+    ///      ratio is ~3.5e19. Larger ratios take the root of ratio × 2^64 and
+    ///      shift it up by 2^64, which still keeps at least 64 bits.
     function _sqrtPriceX96(uint256 price, bool tokenIsToken0) internal pure returns (uint160) {
-        uint256 ratioX192 = tokenIsToken0
-            ? Math.mulDiv(price, 1 << 192, BondingCurve.SCALE)
-            : Math.mulDiv(BondingCurve.SCALE, 1 << 192, price);
-        uint256 sqrtPrice = Math.sqrt(ratioX192);
+        (uint256 num, uint256 den) = tokenIsToken0 ? (price, BondingCurve.SCALE) : (BondingCurve.SCALE, price);
+        uint256 sqrtPrice = num / den < (1 << 64)
+            ? Math.sqrt(Math.mulDiv(num, 1 << 192, den))
+            : Math.sqrt(Math.mulDiv(num, 1 << 64, den)) << 64;
         require(sqrtPrice > MIN_SQRT_RATIO && sqrtPrice < MAX_SQRT_RATIO, "Price outside Uniswap range");
         return uint160(sqrtPrice);
     }
