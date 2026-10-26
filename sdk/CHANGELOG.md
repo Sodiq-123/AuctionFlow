@@ -1,5 +1,34 @@
 # auctionflow-sdk
 
+## 2.1.0
+
+### Minor Changes
+
+- 2ed2818: Payouts are now claimed rather than sent. The creator's share of pool fees,
+  and any reserve migration couldn't place, are credited to the creator, who
+  withdraws them with `claim(token)`. Protocol fees accrue in the contract and
+  `claimProtocolFees(token)` pays them to the fee recipient. A blacklisted
+  address can therefore only block its own claim, never a holder's sell or a
+  token's migration. `getClaimable` and `getProtocolFees` read the balances.
+
+  New auctions can only be priced in owner-approved payment tokens;
+  `isPaymentTokenAllowed(token)` checks one.
+
+  Also fixed in the contract: a buyer could stop the raise one unit short of the
+  threshold, after which every purchase reverted. Such a buy now graduates the
+  auction.
+
+- fbb6722: `isPaused()` reports whether the protocol is paused. The contract gains an
+  emergency pause that blocks launches and curve buys only: selling back,
+  migration, withdrawals and fee collection keep working while paused. The
+  ABI also adds two-step ownership (`pendingOwner`, `acceptOwnership`).
+
+### Patch Changes
+
+- Base Sepolia now points at `0xE57fE62e31666A9B749E89086A8a5487A530153b`, the
+  deployment with the emergency pause, two-step ownership, claim-based payouts
+  and the payment-token allowlist. It is owned by a Safe multisig.
+
 ## 2.0.1
 
 ### Patch Changes
