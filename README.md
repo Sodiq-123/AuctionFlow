@@ -35,16 +35,18 @@ An open-source token launchpad for EVM chains: launch a token in one call, trade
 
 ## Live on Base Sepolia
 
-One complete auction, from launch to a trading Uniswap market, picked up by the indexer. This run used the previous deployment, [`0x722F4521…`](https://sepolia.basescan.org/address/0x722F4521b96acA1df7C65a1DbE3B1713803ccEa9), which came before sell-back, one-click launch and fixed-point prices.
+One complete launch, from a one-click `launch` to a trading Uniswap market, run against the deployed contract with the standard launch preset and picked up by the indexer. The preset: 1 billion tokens priced in USDC, starting at 0.000000002 USDC each, graduating at 10 USDC raised with 80% of the raise going to the pool, a 1% protocol fee on curve trades, and 20% of pool trading fees to the protocol.
 
 | Step | What happened | Transaction |
 | --- | --- | --- |
-| Create | Auction 0 for a new DEMO token: 0.01 USDC per token to start, capped at 10.5 USDC raised, 50% of the raise reserved for liquidity, 20% of trading fees to the protocol | [`0x494692…`](https://sepolia.basescan.org/tx/0x4946922c6a15321cc85ff8d202ee0565da8305aead545a5c82fd33510c3eb14b) |
-| Buy | Asked for 1,500 DEMO; the cap allowed 1,000, so the purchase was **partially filled** for 10.5 USDC plus a 0.2625 USDC protocol fee, and closed the auction | [`0x956418…`](https://sepolia.basescan.org/tx/0x9564185c830f8ab0a1a093ccfaf3447266fc0c3dc99302d86ee199d94901bf3d) |
-| Migrate | Opened a 1% Uniswap v3 [pool](https://sepolia.basescan.org/address/0x657f7d0834f98d828Dd977F17Dbc9b5156Da858e) at the auction's final price (0.011 USDC) with 5.25 USDC and 477.27 newly minted DEMO, locked the position in the contract, and unlocked the token | [`0x41704b…`](https://sepolia.basescan.org/tx/0x41704b6339a7113edd3591e515b603c8e5de035adc90e1cd379749bc674093c3) |
-| Withdraw | The creator claimed the other half of the raise, 5.25 USDC | [`0x7b6ee5…`](https://sepolia.basescan.org/tx/0x7b6ee5017750347fa52d2766ff0aa4ec4fcabc696d3c5b85ba579ceb0f146172) |
-| Trade | Sold 100 DEMO, then bought with 1 USDC, through Uniswap's router | [`0x769c05…`](https://sepolia.basescan.org/tx/0x769c05e3ce51f202ddadff7d9833ae9f9784ad75f8ea672a8f45abdd6eed711b), [`0xceb6c7…`](https://sepolia.basescan.org/tx/0xceb6c7fdb837ddbb027df057bef75481c2f13f656bf72a5f5667e7652c17a3ee) |
-| Collect fees | The pool's 1% trading fees, split 80% to the creator and 20% to the protocol | [`0x620e4f…`](https://sepolia.basescan.org/tx/0x620e4f74fcd00352088e676405dceac9dbf1ae2a0bdf226e4fbfe06044ba96e1) |
+| Launch | `launch("Flow Demo", "FLOW", "ipfs://flow-demo")` created auction 0 and its [FLOW token](https://sepolia.basescan.org/address/0xfd776239debaac00ce0704980e422de3199d2680) from the preset | [`0x93630a…`](https://sepolia.basescan.org/tx/0x93630a0ccef08a3740161f25853aad57c7c25245d988cc98e506aa61b7e5bd89) |
+| Buy | 200M FLOW (20% of the supply) for 1.20 USDC plus a 0.012 USDC fee | [`0x802fa6…`](https://sepolia.basescan.org/tx/0x802fa6c02071838c298f638d87b2cc66b022736a095c7fc621e68d5cf1a7c240) |
+| Sell | 50M FLOW **sold back to the curve** for 0.45 USDC less a 0.0045 USDC fee; the tokens were burned | [`0x0deba3…`](https://sepolia.basescan.org/tx/0x0deba34cc3af2394eec93956990721c6723bc283f39fbafd34b3831f2a49e01d) |
+| Graduate | Asked for 600M FLOW; 508.9M fitted under the threshold, so the purchase was **partially filled** for 9.25 USDC, bringing the raise to exactly 10 USDC and closing the curve | [`0xfd72e4…`](https://sepolia.basescan.org/tx/0xfd72e403fa475fc278f02ab7a712f031ada2e7e27f21e1998a1ce07a555fc46b) |
+| Migrate | Opened a 1% Uniswap v3 [pool](https://sepolia.basescan.org/address/0x81A8e61E073d080B3Aa42Ab6FC9CD6F7aeC91F1d) at the curve's final price (0.0000000284 USDC) with 8 USDC and 282.1M newly minted FLOW, locked the position in the contract, unlocked the token and renounced its ownership | [`0xf3b8f3…`](https://sepolia.basescan.org/tx/0xf3b8f36e49f54e8acbbfe34194b8222bcae702bd6042ab39fc9749347303c194) |
+| Trade | Sold 50M FLOW for 1.19 USDC, then bought 42.1M FLOW with 1 USDC, through Uniswap's router | [`0x580ddc…`](https://sepolia.basescan.org/tx/0x580ddc1cede19e7339c7a10445481d424cb74eb8974a22a0333d596fb5d7527b), [`0x2ebb92…`](https://sepolia.basescan.org/tx/0x2ebb92a9f484e5c534cc25fc05e472d7acbcc34b1a4a92e58e907f9a54712373) |
+| Collect fees | The pool's 1% trading fees (500,000 FLOW and 0.009999 USDC), split 80% to the creator and 20% to the protocol | [`0xe83e37…`](https://sepolia.basescan.org/tx/0xe83e37e6b1a2d75fbabfe0077b57942e802d2e65be068d0da7c69e1cc28c7ff5) |
+| Withdraw | The creator claimed their 20% of the raise, 2 USDC | [`0x257529…`](https://sepolia.basescan.org/tx/0x257529d7ea5aafe52ecb5c85a0b3cd04b594e6fb96e0d75d0cc14a51cd4c671a) |
 
 The indexer turned those events into queryable data:
 
@@ -52,13 +54,16 @@ The indexer turned those events into queryable data:
 {
   auctions {
     items {
-      id state totalRaised totalSold currentPrice liquidityBps
+      id state totalRaised totalSold currentPrice liquidityBps metadataUri
       poolAddress positionId liquidityTokens liquidityPayment
       proceedsWithdrawn lpFeesCreatorPayment lpFeesProtocolPayment
     }
   }
+  trades(orderBy: "blockNumber") {
+    items { side amount value protocolFee }
+  }
   protocolMetricss {
-    items { totalVolumeRaised totalFeesCollected totalLpFeesCollected }
+    items { totalVolumeRaised totalSellVolume totalFeesCollected totalLpFeesCollected }
   }
 }
 ```
@@ -71,25 +76,34 @@ The indexer turned those events into queryable data:
         {
           "id": "0",
           "state": "MIGRATED",
-          "totalRaised": "10500000",
-          "totalSold": "1000000000000000000000",
-          "currentPrice": "11000",
-          "liquidityBps": "5000",
-          "poolAddress": "0x657f7d0834f98d828dd977f17dbc9b5156da858e",
-          "positionId": "83164",
-          "liquidityTokens": "477272727272721584742",
-          "liquidityPayment": "5250000",
+          "totalRaised": "10000000",
+          "totalSold": "658872332094769327778525365",
+          "currentPrice": "28354893283790773",
+          "liquidityBps": "8000",
+          "metadataUri": "ipfs://flow-demo",
+          "poolAddress": "0x81a8e61e073d080b3aa42ab6fc9cd6f7aec91f1d",
+          "positionId": "83360",
+          "liquidityTokens": "282138251057119753498348315",
+          "liquidityPayment": "8000000",
           "proceedsWithdrawn": true,
           "lpFeesCreatorPayment": "8000",
           "lpFeesProtocolPayment": "1999"
         }
       ]
     },
+    "trades": {
+      "items": [
+        { "side": "BUY", "amount": "200000000000000000000000000", "value": "1200000", "protocolFee": "12000" },
+        { "side": "SELL", "amount": "50000000000000000000000000", "value": "450000", "protocolFee": "4500" },
+        { "side": "BUY", "amount": "508872332094769327778525365", "value": "9250000", "protocolFee": "92500" }
+      ]
+    },
     "protocolMetricss": {
       "items": [
         {
-          "totalVolumeRaised": "10500000",
-          "totalFeesCollected": "262500",
+          "totalVolumeRaised": "10450000",
+          "totalSellVolume": "450000",
+          "totalFeesCollected": "109000",
           "totalLpFeesCollected": "1999"
         }
       ]
@@ -98,7 +112,7 @@ The indexer turned those events into queryable data:
 }
 ```
 
-Amounts are in base units: USDC has 6 decimals and DEMO has 18. So the raise was 10.5 USDC for 1,000 DEMO, and the pool holds 5.25 USDC and 477.27 DEMO. The DEMO figure ends in `…21584742` rather than a round number because Uniswap rounds in its own favour; the contract burned the unused remainder. On the protocol's side, `totalFeesCollected` is the 0.2625 USDC purchase fee and `totalLpFeesCollected` is its 0.001999 USDC share of trading fees. Large integers come back as strings because GraphQL's `Int` type is limited to 32 bits.
+Amounts are in base units: USDC has 6 decimals and FLOW has 18. `currentPrice` is a fixed-point price with 18 extra decimals, so `28354893283790773` is 0.0000000284 USDC per FLOW. The raise is 10 USDC: 10.45 USDC of buys less the 0.45 USDC paid out on the sell. On the protocol's side, `totalFeesCollected` is 0.109 USDC of curve fees across the three trades and `totalLpFeesCollected` is its 0.001999 USDC share of pool fees; it also received 100,000 FLOW, its share of the token-side fees. Large integers come back as strings because GraphQL's `Int` type is limited to 32 bits.
 
 ---
 
