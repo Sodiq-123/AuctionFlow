@@ -29,13 +29,13 @@ An open-source token launchpad for EVM chains: launch a token in one call, trade
                Base + Base Sepolia
 ```
 
-**Deployed contract (Base Sepolia):** [`0x722F4521b96acA1df7C65a1DbE3B1713803ccEa9`](https://sepolia.basescan.org/address/0x722F4521b96acA1df7C65a1DbE3B1713803ccEa9)
+**Deployed contract (Base Sepolia):** [`0xc6DB1c900FAEB4079281Ecd6Ec538C027cD18c28`](https://sepolia.basescan.org/address/0xc6DB1c900FAEB4079281Ecd6Ec538C027cD18c28)
 
 ---
 
 ## Live on Base Sepolia
 
-One complete auction, from launch to a trading Uniswap market, run against the deployed contract and picked up by the indexer.
+One complete auction, from launch to a trading Uniswap market, picked up by the indexer. This run used the previous deployment, [`0x722F4521…`](https://sepolia.basescan.org/address/0x722F4521b96acA1df7C65a1DbE3B1713803ccEa9), which came before sell-back, one-click launch and fixed-point prices.
 
 | Step | What happened | Transaction |
 | --- | --- | --- |

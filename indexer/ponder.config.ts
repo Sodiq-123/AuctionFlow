@@ -13,8 +13,8 @@ export default createConfig({
     TokenAuction: {
       chain: "baseSepolia",
       abi: TokenAuctionAbi.abi,
-      address: "0x722f4521b96aca1df7c65a1dbe3b1713803ccea9",
-      startBlock: 49300810,
+      address: "0xc6db1c900faeb4079281ecd6ec538c027cd18c28",
+      startBlock: 50414898,
     },
   },
 });
