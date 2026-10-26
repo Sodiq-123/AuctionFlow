@@ -25,6 +25,8 @@ contract TradeHandler is Test {
     uint256 public ghostSold;    // tokens outstanding: received by buyers, minus sold back
     uint256 public ghostDonated; // payment tokens sent to the auction directly
     uint256 public ghostSwept;   // payment tokens the owner recovered
+    uint256 public ghostFeesPaid;    // fees traders paid, from their own balances
+    uint256 public ghostFeesClaimed; // fees the fee recipient received
 
     constructor(TokenAuction _auction, MockUSDC _usdc, uint256 _auctionId, address _owner) {
         auction = _auction;
@@ -50,9 +52,14 @@ contract TradeHandler is Test {
         // purchase that fills the auction may deliver less than requested.
         (TokenAuction.AuctionConfig memory cfg,,,) = auction.auctions(auctionId);
         uint256 before = cfg.token.balanceOf(actor);
+        uint256 usdcBefore = usdc.balanceOf(actor);
+        (,, uint256 raisedBefore,) = auction.auctions(auctionId);
         vm.prank(actor);
         try auction.buyTokens(auctionId, amount, type(uint256).max) {
             ghostSold += cfg.token.balanceOf(actor) - before;
+            (,, uint256 raisedAfter,) = auction.auctions(auctionId);
+            // Paid beyond what reached the raise is the fee.
+            ghostFeesPaid += (usdcBefore - usdc.balanceOf(actor)) - (raisedAfter - raisedBefore);
         } catch {
             // Expected reverts (exceeds max raise, auction completed) are fine —
             // the invariants must still hold whether or not a buy succeeds.
@@ -66,10 +73,15 @@ contract TradeHandler is Test {
         uint256 held = cfg.token.balanceOf(actor);
         if (held == 0) return;
         amount = bound(amount, 1, held);
+        uint256 usdcBefore = usdc.balanceOf(actor);
+        (,, uint256 raisedBefore,) = auction.auctions(auctionId);
 
         vm.prank(actor);
         try auction.sellTokens(auctionId, amount, 0) {
             ghostSold -= held - cfg.token.balanceOf(actor);
+            (,, uint256 raisedAfter,) = auction.auctions(auctionId);
+            // Taken from the raise beyond what the seller received is the fee.
+            ghostFeesPaid += (raisedBefore - raisedAfter) - (usdc.balanceOf(actor) - usdcBefore);
         } catch {
             // Selling after graduation is an expected outcome.
         }
@@ -83,6 +95,17 @@ contract TradeHandler is Test {
         vm.prank(actor);
         usdc.transfer(address(auction), amount);
         ghostDonated += amount;
+    }
+
+    /// Anyone pays the protocol's accrued fees out to the fee recipient.
+    function claimFees() external {
+        address recipient = auction.protocolFeeRecipient();
+        uint256 before = usdc.balanceOf(recipient);
+        try auction.claimProtocolFees(usdc) {
+            ghostFeesClaimed += usdc.balanceOf(recipient) - before;
+        } catch {
+            // "Nothing to claim" is an expected outcome.
+        }
     }
 
     /// The owner recovers whatever excess exists at this moment.
@@ -114,6 +137,7 @@ contract TokenAuctionInvariantTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(feeRecipient, 250, INonfungiblePositionManager(makeAddr("positionManager")));
+        auction.setPaymentTokenAllowed(address(usdc), true);
 
         vm.prank(creator);
         auctionId = auction.createAuction(
@@ -133,11 +157,12 @@ contract TokenAuctionInvariantTest is Test {
         handler = new TradeHandler(auction, usdc, auctionId, address(this));
 
         // Only fuzz through the handler's entrypoints.
-        bytes4[] memory selectors = new bytes4[](4);
+        bytes4[] memory selectors = new bytes4[](5);
         selectors[0] = TradeHandler.buy.selector;
         selectors[1] = TradeHandler.sell.selector;
         selectors[2] = TradeHandler.donate.selector;
         selectors[3] = TradeHandler.sweep.selector;
+        selectors[4] = TradeHandler.claimFees.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
     }
@@ -169,11 +194,17 @@ contract TokenAuctionInvariantTest is Test {
         assertLe(sold, MAX_SUPPLY);
     }
 
-    /// Custody accounting matches what the auction raised. No withdrawals
-    /// happen in this suite, so everything raised is still owed.
-    function invariant_custodiedEqualsRaised() public view {
+    /// Custody accounting matches what the auction raised plus unclaimed
+    /// fees. No withdrawals happen in this suite, so the raise is still owed.
+    function invariant_custodiedEqualsRaisedPlusFees() public view {
         (uint256 raised,) = _totals();
-        assertEq(auction.custodied(address(usdc)), raised);
+        assertEq(auction.custodied(address(usdc)), raised + auction.protocolFees(address(usdc)));
+    }
+
+    /// Every fee a trader paid is either still accrued or was paid to the fee
+    /// recipient: none is lost and none is double-counted.
+    function invariant_feesFullyAccounted() public view {
+        assertEq(auction.protocolFees(address(usdc)) + handler.ghostFeesClaimed(), handler.ghostFeesPaid());
     }
 
     /// Solvency: the contract always holds at least what it owes creators,
@@ -182,13 +213,14 @@ contract TokenAuctionInvariantTest is Test {
         assertGe(usdc.balanceOf(address(auction)), auction.custodied(address(usdc)));
     }
 
-    /// Every unit is accounted for: balance = raised + donated - swept.
-    /// Sweeping can only ever remove donated excess, never creator funds.
+    /// Every unit is accounted for: balance = raised + unclaimed fees +
+    /// donated - swept. Sweeping can only ever remove donated excess, never
+    /// creator funds or fees.
     function invariant_balanceFullyAccounted() public view {
         (uint256 raised,) = _totals();
         assertEq(
             usdc.balanceOf(address(auction)),
-            raised + handler.ghostDonated() - handler.ghostSwept()
+            raised + auction.protocolFees(address(usdc)) + handler.ghostDonated() - handler.ghostSwept()
         );
         assertLe(handler.ghostSwept(), handler.ghostDonated());
     }

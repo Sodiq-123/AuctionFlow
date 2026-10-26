@@ -45,6 +45,7 @@ contract TokenAuctionAdminTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
+        auction.setPaymentTokenAllowed(address(usdc), true);
         usdc.transfer(buyer, 10_000_000e6);
     }
 
@@ -92,17 +93,28 @@ contract TokenAuctionAdminTest is Test {
 
     // --- fee recipient ------------------------------------------------------
 
-    function test_setProtocolFeeRecipient_redirectsLaterFees() public {
+    /// Fees accrue until claimed, so a new recipient also receives fees
+    /// earned before the change: a blacklisted or lost recipient can be
+    /// replaced without losing anything.
+    function test_setProtocolFeeRecipient_redirectsUnclaimedFees() public {
         uint256 id = _createAuction(address(usdc), MAX_RAISE);
+        _buy(id, 1_000e18);
 
         vm.expectEmit(true, true, false, false);
         emit TokenAuction.ProtocolFeeRecipientUpdated(feeRecipient, treasury);
         auction.setProtocolFeeRecipient(treasury);
 
-        _buy(id, 1_000e18);
+        vm.expectEmit(true, true, false, true);
         uint256 cost = BondingCurve.calculateBuyCost(0, 1_000e18, BASE_PRICE, SLOPE);
+        emit TokenAuction.ProtocolFeesClaimed(address(usdc), treasury, (cost * FEE_BPS) / 10_000);
+        auction.claimProtocolFees(usdc);
         assertEq(usdc.balanceOf(treasury), (cost * FEE_BPS) / 10_000, "new recipient paid");
         assertEq(usdc.balanceOf(feeRecipient), 0, "old recipient not paid");
+    }
+
+    function test_claimProtocolFees_revertsWhenNothingAccrued() public {
+        vm.expectRevert("Nothing to claim");
+        auction.claimProtocolFees(usdc);
     }
 
     function test_setProtocolFeeRecipient_onlyOwner() public {
@@ -147,11 +159,15 @@ contract TokenAuctionAdminTest is Test {
         uint256 cost = BondingCurve.calculateBuyCost(0, 1_000e18, BASE_PRICE, SLOPE);
         uint256 id = _createAuction(address(usdc), cost); // the purchase graduates it
         _buy(id, 1_000e18);
-        assertEq(auction.custodied(address(usdc)), cost);
+        uint256 fee = (cost * FEE_BPS) / 10_000;
+        assertEq(auction.custodied(address(usdc)), cost + fee, "raise and unclaimed fee");
 
         vm.prank(creator);
         auction.withdrawProceeds(id);
         // The liquidity share stays owed until migration moves it into the pool.
+        assertEq(auction.custodied(address(usdc)), (cost * 5_000) / 10_000 + fee);
+
+        auction.claimProtocolFees(usdc);
         assertEq(auction.custodied(address(usdc)), (cost * 5_000) / 10_000);
     }
 
@@ -180,7 +196,7 @@ contract TokenAuctionAdminTest is Test {
         // The creator can still withdraw in full afterwards.
         vm.prank(creator);
         auction.withdrawProceeds(id);
-        assertEq(usdc.balanceOf(creator), owed - (owed * 5_000) / 10_000, "creator's share, liquidity still reserved");
+        assertEq(usdc.balanceOf(creator), cost - (cost * 5_000) / 10_000, "creator's share, liquidity still reserved");
     }
 
     function test_sweep_revertsWithNoExcess() public {
@@ -208,6 +224,7 @@ contract TokenAuctionAdminTest is Test {
     function test_buyTokens_rejectsFeeOnTransferPaymentToken() public {
         FeeOnTransferToken taxed = new FeeOnTransferToken();
         taxed.transfer(buyer, 10_000_000e6);
+        auction.setPaymentTokenAllowed(address(taxed), true);
         uint256 id = _createAuction(address(taxed), MAX_RAISE);
 
         vm.startPrank(buyer);
@@ -215,6 +232,69 @@ contract TokenAuctionAdminTest is Test {
         vm.expectRevert("Unsupported payment token");
         auction.buyTokens(id, 1_000e18, type(uint256).max);
         vm.stopPrank();
+    }
+
+    // --- payment token allowlist ----------------------------------------------
+
+    function test_createAuction_rejectsUnapprovedPaymentToken() public {
+        MockUSDC other = new MockUSDC();
+        vm.prank(creator);
+        vm.expectRevert("Payment token not allowed");
+        auction.createAuction(
+            TokenAuction.AuctionParams({
+                name: "TestToken",
+                symbol: "TT",
+                metadataURI: "",
+                maxSupply: 1_000_000_000e18,
+                paymentToken: address(other),
+                basePrice: BASE_PRICE,
+                slope: SLOPE,
+                maxRaise: MAX_RAISE,
+                liquidityBps: 5_000
+            })
+        );
+    }
+
+    function test_setLaunchPreset_rejectsUnapprovedPaymentToken() public {
+        MockUSDC other = new MockUSDC();
+        vm.expectRevert("Payment token not allowed");
+        auction.setLaunchPreset(
+            TokenAuction.LaunchPreset({
+                paymentToken: address(other),
+                maxSupply: 1_000_000_000e18,
+                basePrice: BASE_PRICE,
+                slope: SLOPE,
+                maxRaise: MAX_RAISE,
+                liquidityBps: 5_000
+            })
+        );
+    }
+
+    /// Disallowing a token stops new launches in it; auctions already priced
+    /// in it trade on.
+    function test_setPaymentTokenAllowed_disallowOnlyAffectsNewAuctions() public {
+        uint256 id = _createAuction(address(usdc), MAX_RAISE);
+
+        vm.expectEmit(true, false, false, true);
+        emit TokenAuction.PaymentTokenAllowedUpdated(address(usdc), false);
+        auction.setPaymentTokenAllowed(address(usdc), false);
+
+        _buy(id, 1_000e18);
+        assertEq(auction.userPurchases(id, buyer), 1_000e18, "existing auction still trades");
+
+        vm.expectRevert("Payment token not allowed");
+        _createAuction(address(usdc), MAX_RAISE);
+    }
+
+    function test_setPaymentTokenAllowed_onlyOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        auction.setPaymentTokenAllowed(address(usdc), false);
+    }
+
+    function test_setPaymentTokenAllowed_rejectsZero() public {
+        vm.expectRevert("Zero payment token");
+        auction.setPaymentTokenAllowed(address(0), true);
     }
 
     // --- ownership ------------------------------------------------------------

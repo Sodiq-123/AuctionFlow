@@ -58,6 +58,7 @@ contract TokenAuctionPauseTest is Test {
         auction = new TokenAuction(
             makeAddr("feeRecipient"), 250, INonfungiblePositionManager(address(new NoPoolPositionManager()))
         );
+        auction.setPaymentTokenAllowed(address(usdc), true);
         auction.setLaunchPreset(
             TokenAuction.LaunchPreset({
                 paymentToken: address(usdc),

@@ -186,8 +186,11 @@ if (!(await sdk.hasWithdrawnProceeds(0n))) {
   await sdk.withdrawProceeds(0n);
 }
 
-// 3. Later, collect the pool's trading fees.
+// 3. Later, collect the pool's trading fees. The creator's share is
+//    credited to them, and they withdraw it (in both tokens) with claim.
 await sdk.collectFees(0n);
+await sdk.claim(usdcAddress);
+await sdk.claim(tokenAddress);
 ```
 
 **Migration** pairs the auction's liquidity share of the raise with newly
@@ -195,13 +198,16 @@ minted tokens and opens a 1% Uniswap v3 pool **at the auction's final price**,
 so there is no price jump to arbitrage. If someone initialised the pool
 beforehand at a different price, migration corrects it first. The position NFT
 stays in the auction contract forever, so the liquidity can never be pulled.
-Tokens Uniswap doesn't use are burned, and leftover funds go to the creator.
+Tokens Uniswap doesn't use are burned, and leftover funds are credited to the
+creator to `claim`.
 
 **Withdrawal** pays the creator everything not reserved for liquidity: with the
 default 50% share, half the raise. It works before or after migration.
 
-**Trading fees** from the pool go to the creator, minus the protocol's share
-(`lpFeeShareBps`, at most 50%), fixed when the auction is created.
+**Trading fees** from the pool are credited to the creator, minus the
+protocol's share (`lpFeeShareBps`, at most 50%), fixed when the auction is
+created. Payouts are claimed rather than sent, so no recipient (for example an
+address USDC has blacklisted) can block a trade or a migration.
 
 ## How the bonding curve works
 
@@ -245,9 +251,14 @@ Early buyers pay less; later buyers pay more.
 | `migrate(auctionId)` | Open the Uniswap v3 pool at the final price, lock the liquidity, unlock the token. Anyone may call. |
 | `getMigration(auctionId)` | The pool address and position NFT id, or `null` before migration. |
 | `withdrawProceeds(auctionId)` | Pay the creator their share of the raise (what isn't reserved for liquidity). Creator-only, once. |
-| `collectFees(auctionId)` | Collect the pool's trading fees: protocol share to the protocol, the rest to the creator. Anyone may call. |
+| `collectFees(auctionId)` | Collect the pool's trading fees: the protocol's share accrues to the protocol and the rest is credited to the creator. Anyone may call. |
+| `claim(token)` | Withdraw everything credited to the connected account in `token`: a creator's share of pool fees, and any reserve migration couldn't place. |
+| `getClaimable(token, account)` | How much of `token` is credited to `account`. |
+| `claimProtocolFees(token)` | Send the protocol's unclaimed fees in `token` to the fee recipient. Anyone may call. |
+| `getProtocolFees(token)` | The protocol's unclaimed fees in `token`. |
+| `isPaymentTokenAllowed(token)` | Whether new auctions may be priced in `token`. Only owner-approved tokens (USDC) can be used. |
 | `hasWithdrawnProceeds(auctionId)` | Whether the creator has already claimed the proceeds. |
-| `isPaused()` | Whether the protocol is paused. While paused, `launch`, `createAuction` and `buyTokens` revert; selling back, migration, withdrawals and fee collection still work. |
+| `isPaused()` | Whether the protocol is paused. While paused, `launch`, `createAuction` and `buyTokens` revert; selling back, migration, withdrawals, fee collection and claims still work. |
 
 ## License
 

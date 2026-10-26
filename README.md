@@ -156,7 +156,11 @@ An auction's life:
 2. **Trading on the curve.** Anyone can buy, and sell back to the curve, with slippage bounds (`maxCost`, `minProceeds`). Buys round up and sells round down, so the contract can always buy back every outstanding token. Tokens can't be transferred until graduation; selling back is how holders exit.
 3. **Graduation.** The purchase that reaches the threshold (`maxRaise`) is partially filled and closes the curve.
 4. **Migration.** Anyone calls `migrate`. A creator-chosen share of the raise (20–100%) is paired with newly minted tokens in a 1% Uniswap v3 pool at the auction's final price, and the position is locked in the contract forever. The token unlocks for trading.
-5. **Payouts.** The creator withdraws the rest of the raise, and collects the pool's trading fees minus the protocol's share.
+5. **Payouts.** The creator withdraws the rest of the raise. Anyone can collect the pool's trading fees; the creator claims their share, and the protocol's share is paid to its fee recipient. Payouts are claimed rather than sent, so no recipient can block a trade or a migration.
+
+New launches can only be priced in payment tokens the owner has approved (USDC). The owner can pause new launches and curve buys in an emergency, but never selling back, migration, withdrawals or claims.
+
+**Security:** [`contracts/THREAT_MODEL.md`](contracts/THREAT_MODEL.md) covers what's at risk, what the owner can and cannot do, the attacks considered and how each is handled. The contracts have not been externally audited.
 
 ```text
 contracts/src/

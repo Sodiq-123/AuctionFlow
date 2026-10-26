@@ -27,6 +27,7 @@ contract TokenAuctionSellTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
+        auction.setPaymentTokenAllowed(address(usdc), true);
         usdc.transfer(buyer, 10_000_000e6);
     }
 
@@ -78,14 +79,15 @@ contract TokenAuctionSellTest is Test {
         auction.sellTokens(id, 400e18, 0);
 
         assertEq(usdc.balanceOf(buyer) - usdcBefore, proceeds - fee, "seller paid curve price minus fee");
-        assertEq(usdc.balanceOf(feeRecipient), (BondingCurve.calculateBuyCost(0, 1_000e18, BASE_PRICE, SLOPE) * FEE_BPS) / 10_000 + fee, "fee on buy and on sell");
+        uint256 fees = (BondingCurve.calculateBuyCost(0, 1_000e18, BASE_PRICE, SLOPE) * FEE_BPS) / 10_000 + fee;
+        assertEq(auction.protocolFees(address(usdc)), fees, "fee on buy and on sell");
         assertEq(_token(id).balanceOf(buyer), 600e18, "sold tokens burned");
         assertEq(_token(id).totalSupply(), 600e18);
         (uint256 raised, uint256 sold) = _totals(id);
         assertEq(sold, 600e18);
         assertEq(raised, raisedBefore - proceeds);
-        assertEq(auction.custodied(address(usdc)), raised, "custody tracks the raise");
-        assertEq(usdc.balanceOf(address(auction)), raised, "contract holds exactly the raise");
+        assertEq(auction.custodied(address(usdc)), raised + fees, "custody tracks the raise and unclaimed fees");
+        assertEq(usdc.balanceOf(address(auction)), raised + fees, "contract holds exactly that");
     }
 
     function test_sell_lowersThePrice() public {
@@ -141,7 +143,10 @@ contract TokenAuctionSellTest is Test {
         (uint256 raised, uint256 sold) = _totals(id);
         assertEq(sold, 0, "every token sold back");
         assertEq(_token(id).totalSupply(), 0);
-        assertEq(usdc.balanceOf(address(auction)), raised, "only rounding dust remains, and it is accounted for");
+        assertEq(
+            usdc.balanceOf(address(auction)), raised + auction.protocolFees(address(usdc)),
+            "only rounding dust and unclaimed fees remain, and both are accounted for"
+        );
         // Each trade rounds by under 2 units (one per term): 7 trades, under 14.
         assertLt(raised, 14, "only rounding dust remains");
     }

@@ -28,6 +28,7 @@ contract TokenAuctionWithdrawTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
+        auction.setPaymentTokenAllowed(address(usdc), true);
         usdc.transfer(buyer, 10_000_000 * 1e6);
     }
 
@@ -67,6 +68,12 @@ contract TokenAuctionWithdrawTest is Test {
         (,, raised,) = auction.auctions(id);
     }
 
+    /// What the contract holds for auctions, excluding protocol fees, which
+    /// accrue in the same balance until claimed.
+    function _held() internal view returns (uint256) {
+        return usdc.balanceOf(address(auction)) - auction.protocolFees(address(usdc));
+    }
+
     /// The creator's share of a raise: what isn't reserved for the Uniswap
     /// pool (these tests use a 50% liquidity share).
     function _creatorShare(uint256 raised) internal pure returns (uint256) {
@@ -80,7 +87,7 @@ contract TokenAuctionWithdrawTest is Test {
         _graduate(id);
         uint256 raised = _raised(id);
         assertEq(raised, MAX_RAISE, "raised exactly the threshold");
-        assertEq(usdc.balanceOf(address(auction)), raised, "contract custodies proceeds");
+        assertEq(_held(), raised, "contract custodies proceeds");
 
         uint256 before = usdc.balanceOf(creator);
         vm.expectEmit(true, true, false, true);
@@ -90,7 +97,7 @@ contract TokenAuctionWithdrawTest is Test {
 
         assertEq(usdc.balanceOf(creator) - before, _creatorShare(raised), "creator received their share");
         assertEq(
-            usdc.balanceOf(address(auction)), raised - _creatorShare(raised),
+            _held(), raised - _creatorShare(raised),
             "liquidity share stays reserved for the pool"
         );
         assertTrue(auction.proceedsWithdrawn(id), "withdrawn flag set");
@@ -147,7 +154,7 @@ contract TokenAuctionWithdrawTest is Test {
 
         assertEq(usdc.balanceOf(creator), _creatorShare(firstRaised), "only first auction paid out");
         assertEq(
-            usdc.balanceOf(address(auction)),
+            _held(),
             secondRaised + (firstRaised - _creatorShare(firstRaised)),
             "second auction's funds and first auction's liquidity share untouched"
         );

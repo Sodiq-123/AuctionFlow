@@ -19,6 +19,7 @@ contract TokenAuctionCreateTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(feeRecipient, 250, INonfungiblePositionManager(makeAddr("positionManager")));
+        auction.setPaymentTokenAllowed(address(usdc), true);
         usdc.transfer(creator, 10_000 * 1e6);
     }
 

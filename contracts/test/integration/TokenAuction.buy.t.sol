@@ -27,6 +27,7 @@ contract TokenAuctionBuyTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
+        auction.setPaymentTokenAllowed(address(usdc), true);
         usdc.transfer(buyer, 10_000_000 * 1e6);
     }
 
@@ -79,8 +80,14 @@ contract TokenAuctionBuyTest is Test {
         AuctionToken token = _token(id);
         assertEq(token.balanceOf(buyer), amount, "buyer minted amount");
         assertEq(token.totalSupply(), amount, "supply == amount");
-        assertEq(usdc.balanceOf(address(auction)), cost, "contract holds cost");
+        assertEq(usdc.balanceOf(address(auction)), cost + fee, "contract holds cost and fee");
+        assertEq(auction.protocolFees(address(usdc)), fee, "fee accrued to the protocol");
+        assertEq(auction.custodied(address(usdc)), cost + fee, "both owed");
+
+        auction.claimProtocolFees(usdc); // anyone may trigger it
         assertEq(usdc.balanceOf(feeRecipient), fee, "fee recipient paid fee");
+        assertEq(auction.protocolFees(address(usdc)), 0);
+        assertEq(usdc.balanceOf(address(auction)), cost, "contract holds cost");
 
         (uint256 raised, uint256 sold) = _totals(id);
         assertEq(raised, cost, "totalRaised == cost");
@@ -230,5 +237,40 @@ contract TokenAuctionBuyTest is Test {
         vm.prank(buyer);
         vm.expectRevert("Zero amount");
         auction.buyTokens(id, 0, type(uint256).max);
+    }
+
+    /// A buyer can stop the raise one payment unit short of the threshold:
+    /// the smallest possible purchase costs two units, so nothing more can
+    /// be bought. The next buy graduates the auction instead of reverting,
+    /// and charges nothing.
+    function test_buyTokens_graduatesWhenOnlyDustRemains() public {
+        uint256 maxRaise = 10_000e6;
+        uint256 id = _createAuction(maxRaise);
+
+        // The largest purchase that leaves exactly one unit unraised.
+        uint256 lo;
+        uint256 hi = 1_000_000_000e18;
+        while (lo < hi) {
+            uint256 mid = (lo + hi + 1) / 2;
+            (uint256 c,) = auction.getBuyCost(id, mid);
+            if (c <= maxRaise - 1) lo = mid;
+            else hi = mid - 1;
+        }
+        vm.startPrank(buyer);
+        usdc.approve(address(auction), type(uint256).max);
+        auction.buyTokens(id, lo, type(uint256).max);
+        (uint256 raised, uint256 sold) = _totals(id);
+        assertEq(raised, maxRaise - 1, "one unit short");
+
+        uint256 usdcBefore = usdc.balanceOf(buyer);
+        vm.expectEmit(true, false, false, true);
+        emit TokenAuction.AuctionCompleted(id, maxRaise - 1, sold);
+        auction.buyTokens(id, 1_000e18, type(uint256).max);
+        vm.stopPrank();
+
+        (, TokenAuction.AuctionState state,,) = auction.auctions(id);
+        assertEq(uint256(state), uint256(TokenAuction.AuctionState.COMPLETED), "graduated");
+        assertEq(usdc.balanceOf(buyer), usdcBefore, "charged nothing");
+        assertEq(auction.userPurchases(id, buyer), sold, "received nothing");
     }
 }

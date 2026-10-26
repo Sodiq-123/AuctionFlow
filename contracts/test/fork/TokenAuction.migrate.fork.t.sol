@@ -76,6 +76,7 @@ abstract contract MigrateForkBase is Test {
         deployCodeTo("TokenAuction.migrate.fork.t.sol:ForkUSDC", paymentAddress());
         usdc = ForkUSDC(paymentAddress());
         auction = new TokenAuction(feeRecipient, 250, NPM);
+        auction.setPaymentTokenAllowed(address(usdc), true);
         auction.setDefaultLpFeeShareBps(LP_FEE_SHARE_BPS);
         swapper = new Swapper();
 
@@ -168,7 +169,7 @@ abstract contract MigrateForkBase is Test {
         uint256 price = _spot(id);
         (,, uint256 raised,) = auction.auctions(id);
         uint256 liquidityShare = (raised * LIQUIDITY_BPS) / 10_000;
-        uint256 creatorBefore = usdc.balanceOf(creator);
+        uint256 fees = auction.protocolFees(address(usdc));
 
         vm.prank(buyer); // anyone may migrate
         auction.migrate(id);
@@ -184,10 +185,11 @@ abstract contract MigrateForkBase is Test {
         (uint160 sqrtP,,,,,,) = IUniswapV3Pool(pool).slot0();
         assertEq(sqrtP, _sqrtPriceX96(price, _tokenIsToken0(token)), "pool opens at the auction's final price");
 
-        // The pool holds the liquidity share; Uniswap's rounding dust went to the creator.
+        // The pool holds the liquidity share; Uniswap's rounding dust is credited to the creator.
         uint256 poolUsdc = usdc.balanceOf(pool);
+        uint256 dust = auction.claimable(address(usdc), creator);
         assertLe(poolUsdc, liquidityShare);
-        assertEq(poolUsdc + (usdc.balanceOf(creator) - creatorBefore), liquidityShare, "dust refunded to creator");
+        assertEq(poolUsdc + dust, liquidityShare, "dust credited to creator");
 
         // Unused tokens were burned, the supply is fixed, and the token is tradeable.
         assertEq(token.balanceOf(address(auction)), 0, "leftover tokens burned");
@@ -196,9 +198,9 @@ abstract contract MigrateForkBase is Test {
         vm.prank(buyer);
         token.transfer(attacker, 1e18);
 
-        // The creator's share stays custodied until withdrawn.
-        assertEq(usdc.balanceOf(address(auction)), raised - liquidityShare);
-        assertEq(auction.custodied(address(usdc)), raised - liquidityShare);
+        // The creator's share, the dust and the protocol's fees stay custodied until withdrawn.
+        assertEq(usdc.balanceOf(address(auction)), raised - liquidityShare + dust + fees);
+        assertEq(auction.custodied(address(usdc)), raised - liquidityShare + dust + fees);
     }
 
     /// The standard launch preset on Base Sepolia: a billion tokens that
@@ -244,6 +246,12 @@ abstract contract MigrateForkBase is Test {
         assertEq(usdc.balanceOf(creator), creatorShare);
 
         auction.migrate(id);
+        uint256 dust = auction.claimable(address(usdc), creator);
+        if (dust > 0) {
+            vm.prank(creator);
+            auction.claim(usdc);
+        }
+        auction.claimProtocolFees(usdc);
         assertEq(usdc.balanceOf(address(auction)), 0, "everything paid out or in the pool");
         assertEq(auction.custodied(address(usdc)), 0);
     }
@@ -335,17 +343,30 @@ abstract contract MigrateForkBase is Test {
         swapper.swap(pool, t0, t1, tokenIsToken0, 100e18); // sell tokens
         swapper.swap(pool, t0, t1, !tokenIsToken0, 1e6);   // buy with 1 USDC
 
-        uint256 creatorUsdc = usdc.balanceOf(creator);
-        uint256 protocolUsdc = usdc.balanceOf(feeRecipient);
+        uint256 creatorUsdc = auction.claimable(address(usdc), creator);
+        uint256 protocolUsdc = auction.protocolFees(address(usdc));
         (uint256 tokenFees, uint256 paymentFees) = auction.collectFees(id);
 
         assertGt(tokenFees, 0, "token fees accrued");
         assertGt(paymentFees, 0, "USDC fees accrued");
         uint256 protocolShare = (paymentFees * LP_FEE_SHARE_BPS) / 10_000;
-        assertEq(usdc.balanceOf(feeRecipient) - protocolUsdc, protocolShare, "protocol share");
-        assertEq(usdc.balanceOf(creator) - creatorUsdc, paymentFees - protocolShare, "creator share");
-        assertEq(token.balanceOf(feeRecipient), (tokenFees * LP_FEE_SHARE_BPS) / 10_000);
+        uint256 protocolTokens = (tokenFees * LP_FEE_SHARE_BPS) / 10_000;
+        assertEq(auction.protocolFees(address(usdc)) - protocolUsdc, protocolShare, "protocol share");
+        assertEq(auction.claimable(address(usdc), creator) - creatorUsdc, paymentFees - protocolShare, "creator share");
+        assertEq(auction.protocolFees(address(token)), protocolTokens);
+        assertEq(auction.claimable(address(token), creator), tokenFees - protocolTokens);
         assertEq(usdc.balanceOf(address(auction)), auction.custodied(address(usdc)), "custody untouched");
+        assertEq(token.balanceOf(address(auction)), auction.custodied(address(token)), "token fees custodied");
+
+        // Both sides claim their share of both tokens.
+        vm.startPrank(creator);
+        auction.claim(usdc);
+        auction.claim(IERC20(address(token)));
+        vm.stopPrank();
+        auction.claimProtocolFees(IERC20(address(token)));
+        assertEq(token.balanceOf(creator), tokenFees - protocolTokens, "creator claimed token fees");
+        assertEq(token.balanceOf(feeRecipient), protocolTokens, "protocol claimed token fees");
+        assertEq(token.balanceOf(address(auction)), 0);
     }
 }
 

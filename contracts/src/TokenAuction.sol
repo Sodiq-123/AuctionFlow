@@ -86,11 +86,29 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     uint256 internal constant MAX_PRICE_PARAM = 1e45;
     uint256 internal constant MAX_RAISE_BOUND = 1e40;
 
-    /// @notice Payment tokens this contract owes to auction creators, per token:
-    ///         the sum of `totalRaised` across auctions not yet withdrawn.
+    /// @notice Tokens this contract owes, per token: raises not yet withdrawn,
+    ///         payouts not yet claimed and protocol fees not yet claimed.
     ///         Anything held above this is excess (e.g. tokens sent here
     ///         directly) and can be recovered with `sweep`.
     mapping(address => uint256) public custodied;
+
+    /// @notice Protocol fees earned and not yet claimed, per token.
+    ///         `claimProtocolFees` pays them to the current fee recipient.
+    mapping(address => uint256) public protocolFees;
+
+    /// @notice Payouts credited to an account and not yet claimed, by token
+    ///         then account: a creator's share of pool fees, and any reserve
+    ///         that migration couldn't place in the pool.
+    /// @dev    Credited rather than sent so that no recipient can block a
+    ///         trade or a migration. USDC can blacklist an address, and a
+    ///         transfer to a blacklisted creator would otherwise revert the
+    ///         migration and leave every holder's tokens locked.
+    mapping(address => mapping(address => uint256)) public claimable;
+
+    /// @notice Payment tokens new auctions may be priced in. A token the
+    ///         creator controls could block transfers and strand buyers, so
+    ///         only tokens the owner has approved can be used.
+    mapping(address => bool) public paymentTokenAllowed;
 
     // Uniswap v3
     /// @notice Pool fee tier for migrated liquidity: 1%, the usual tier for
@@ -176,6 +194,9 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     event DefaultFeeBpsUpdated(uint256 previous, uint256 current);
     event Swept(address indexed token, address indexed to, uint256 amount);
     event DefaultLpFeeShareBpsUpdated(uint256 previous, uint256 current);
+    event Claimed(address indexed token, address indexed account, uint256 amount);
+    event ProtocolFeesClaimed(address indexed token, address indexed recipient, uint256 amount);
+    event PaymentTokenAllowedUpdated(address indexed token, bool allowed);
     event LaunchPresetUpdated(
         address paymentToken, uint256 maxSupply, uint256 basePrice, uint256 slope, uint256 maxRaise, uint256 liquidityBps
     );
@@ -223,6 +244,7 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     }
 
     function _createAuction(AuctionParams memory p) internal returns (uint256 auctionId) {
+        require(paymentTokenAllowed[p.paymentToken], "Payment token not allowed");
         _validateCurve(p.maxSupply, p.basePrice, p.slope, p.maxRaise, p.liquidityBps);
 
         auctionId = auctionCount++;
@@ -309,12 +331,13 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         auction.totalRaised += cost;
         auction.totalSold += amount;
         userPurchases[auctionId][msg.sender] += amount;
-        custodied[address(auction.config.paymentToken)] += cost;
+        custodied[address(auction.config.paymentToken)] += cost + protocolFee;
+        protocolFees[address(auction.config.paymentToken)] += protocolFee;
         if (filledUp) {
             auction.state = AuctionState.COMPLETED;
         }
 
-        _collectPayment(auction.config.paymentToken, cost, protocolFee);
+        _collectPayment(auction.config.paymentToken, cost + protocolFee);
         auction.config.token.mint(msg.sender, amount);
 
         emit TokensPurchased(
@@ -346,7 +369,10 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
             amount = BondingCurve.maxBuyable(
                 auction.totalSold, remaining, auction.config.basePrice, auction.config.slope, requested
             );
-            require(amount > 0, "Sold out");
+            // What's left can't buy even one token wei (the smallest purchase
+            // costs two payment units). Graduate rather than let a buyer who
+            // stopped the raise just short of the threshold stall it forever.
+            if (amount == 0) return (0, 0, true);
             cost = BondingCurve.calculateBuyCost(
                 auction.totalSold, amount, auction.config.basePrice, auction.config.slope
             );
@@ -354,20 +380,17 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         return (amount, cost, true);
     }
 
-    /// @dev Pull `cost` into custody and route the fee. Measuring the balance
+    /// @dev Pull a purchase's cost and fee into custody. Measuring the balance
     ///      change rejects fee-on-transfer and rebasing tokens, which would
     ///      leave `custodied` larger than what the contract actually holds and
     ///      make the last withdrawal fail.
-    function _collectPayment(IERC20 paymentToken, uint256 cost, uint256 protocolFee) internal {
+    function _collectPayment(IERC20 paymentToken, uint256 total) internal {
         uint256 balanceBefore = paymentToken.balanceOf(address(this));
-        paymentToken.safeTransferFrom(msg.sender, address(this), cost);
+        paymentToken.safeTransferFrom(msg.sender, address(this), total);
         require(
-            paymentToken.balanceOf(address(this)) - balanceBefore == cost,
+            paymentToken.balanceOf(address(this)) - balanceBefore == total,
             "Unsupported payment token"
         );
-        if (protocolFee > 0) {
-            paymentToken.safeTransferFrom(msg.sender, protocolFeeRecipient, protocolFee);
-        }
     }
 
     /// @notice Sell `amount` tokens (in token wei) back to the curve of an
@@ -396,10 +419,10 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         auction.totalRaised -= proceeds;
         auction.totalSold -= amount;
         userPurchases[auctionId][msg.sender] -= amount;
-        custodied[address(payment)] -= proceeds;
+        custodied[address(payment)] -= proceeds - protocolFee;
+        protocolFees[address(payment)] += protocolFee;
 
         auction.config.token.burnFrom(msg.sender, amount);
-        if (protocolFee > 0) payment.safeTransfer(protocolFeeRecipient, protocolFee);
         payment.safeTransfer(msg.sender, proceeds - protocolFee);
 
         emit TokensSold(
@@ -454,7 +477,7 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     ///         newly minted tokens, and keeps the position NFT forever. Never
     ///         leaves tokens permanently locked: if there is nothing to pair, or
     ///         Uniswap rejects the position, transfers are unlocked anyway and
-    ///         the reserved funds go to the creator.
+    ///         the reserved funds are credited to the creator to `claim`.
     function migrate(uint256 auctionId) external nonReentrant {
         AuctionData storage auction = auctions[auctionId];
         require(auction.state == AuctionState.COMPLETED, "Auction not completed");
@@ -487,11 +510,14 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
             _addLiquidity(auctionId, m);
         }
 
-        // Anything Uniswap didn't take: burn tokens, return funds to the creator.
+        // Anything Uniswap didn't take: burn tokens, credit funds to the creator.
         uint256 tokensLeft = m.token.balanceOf(address(this));
         if (tokensLeft > 0) m.token.burn(tokensLeft);
         uint256 paymentLeft = m.payment.balanceOf(address(this)) - m.paymentFloor;
-        if (paymentLeft > 0) m.payment.safeTransfer(auction.config.creator, paymentLeft);
+        if (paymentLeft > 0) {
+            claimable[address(m.payment)][auction.config.creator] += paymentLeft;
+            custodied[address(m.payment)] += paymentLeft;
+        }
 
         // Nothing else will ever be minted or burned: fix the supply for good.
         m.token.renounceOwnership();
@@ -585,8 +611,9 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         if (amount1Delta > 0) IERC20(t1).safeTransfer(msg.sender, uint256(amount1Delta));
     }
 
-    /// @notice Collect the migrated pool's trading fees: the protocol takes its
-    ///         share and the creator receives the rest. Anyone may trigger it.
+    /// @notice Collect the migrated pool's trading fees: the protocol's share
+    ///         is added to `protocolFees` and the rest is credited to the
+    ///         creator to `claim`. Anyone may trigger it.
     function collectFees(uint256 auctionId) external nonReentrant returns (uint256 tokenFees, uint256 paymentFees) {
         AuctionData storage auction = auctions[auctionId];
         require(auction.state == AuctionState.MIGRATED && positionId[auctionId] != 0, "No position");
@@ -604,17 +631,41 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
 
         uint256 protocolToken = (tokenFees * auction.config.lpFeeShareBps) / 10000;
         uint256 protocolPayment = (paymentFees * auction.config.lpFeeShareBps) / 10000;
-        _payOut(IERC20(address(auction.config.token)), auction.config.creator, protocolToken, tokenFees);
-        _payOut(auction.config.paymentToken, auction.config.creator, protocolPayment, paymentFees);
+        _creditFees(address(auction.config.token), auction.config.creator, protocolToken, tokenFees);
+        _creditFees(address(auction.config.paymentToken), auction.config.creator, protocolPayment, paymentFees);
 
         emit LpFeesCollected(
             auctionId, tokenFees - protocolToken, paymentFees - protocolPayment, protocolToken, protocolPayment
         );
     }
 
-    function _payOut(IERC20 token, address creator, uint256 protocolShare, uint256 total) internal {
-        if (protocolShare > 0) token.safeTransfer(protocolFeeRecipient, protocolShare);
-        if (total > protocolShare) token.safeTransfer(creator, total - protocolShare);
+    function _creditFees(address token, address creator, uint256 protocolShare, uint256 total) internal {
+        protocolFees[token] += protocolShare;
+        claimable[token][creator] += total - protocolShare;
+        custodied[token] += total;
+    }
+
+    // --- Claims -------------------------------------------------------------
+
+    /// @notice Withdraw everything credited to you in `token`.
+    function claim(IERC20 token) external nonReentrant returns (uint256 amount) {
+        amount = claimable[address(token)][msg.sender];
+        require(amount > 0, "Nothing to claim");
+        claimable[address(token)][msg.sender] = 0;
+        custodied[address(token)] -= amount;
+        token.safeTransfer(msg.sender, amount);
+        emit Claimed(address(token), msg.sender, amount);
+    }
+
+    /// @notice Send the protocol's unclaimed fees in `token` to the fee
+    ///         recipient. Anyone may trigger it.
+    function claimProtocolFees(IERC20 token) external nonReentrant returns (uint256 amount) {
+        amount = protocolFees[address(token)];
+        require(amount > 0, "Nothing to claim");
+        protocolFees[address(token)] = 0;
+        custodied[address(token)] -= amount;
+        token.safeTransfer(protocolFeeRecipient, amount);
+        emit ProtocolFeesClaimed(address(token), protocolFeeRecipient, amount);
     }
 
     function _liquidityShare(AuctionData storage auction) internal view returns (uint256) {
@@ -648,8 +699,8 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         return uint160(sqrtPrice);
     }
 
-    /// @notice Change where protocol fees are sent. Applies to purchases made
-    ///         after the change, in every auction.
+    /// @notice Change where protocol fees are sent, including fees earned but
+    ///         not yet claimed.
     function setProtocolFeeRecipient(address recipient) external onlyOwner {
         require(recipient != address(0), "Zero fee recipient");
         emit ProtocolFeeRecipientUpdated(protocolFeeRecipient, recipient);
@@ -678,6 +729,7 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     ///         on; existing auctions are unaffected.
     function setLaunchPreset(LaunchPreset calldata preset) external onlyOwner {
         require(preset.paymentToken != address(0), "Zero payment token");
+        require(paymentTokenAllowed[preset.paymentToken], "Payment token not allowed");
         _validateCurve(preset.maxSupply, preset.basePrice, preset.slope, preset.maxRaise, preset.liquidityBps);
         launchPreset = preset;
         emit LaunchPresetUpdated(
@@ -685,9 +737,17 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         );
     }
 
-    /// @notice Recover tokens held above what is owed to auction creators,
-    ///         such as tokens transferred to this contract directly. Funds
-    ///         backing an unwithdrawn auction can never be swept.
+    /// @notice Allow or disallow a payment token for new auctions. Auctions
+    ///         already priced in a token carry on if it is disallowed.
+    function setPaymentTokenAllowed(address token, bool allowed) external onlyOwner {
+        require(token != address(0), "Zero payment token");
+        paymentTokenAllowed[token] = allowed;
+        emit PaymentTokenAllowedUpdated(token, allowed);
+    }
+
+    /// @notice Recover tokens held above what is owed, such as tokens
+    ///         transferred to this contract directly. Unwithdrawn raises,
+    ///         unclaimed payouts and unclaimed fees can never be swept.
     function sweep(IERC20 token, address to) external nonReentrant onlyOwner {
         require(to != address(0), "Zero recipient");
         uint256 balance = token.balanceOf(address(this));
@@ -701,8 +761,8 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
 
     /// @notice Emergency stop for new money: blocks launches and curve buys.
     ///         Every way out keeps working while paused (selling back to the
-    ///         curve, migration, withdrawals and fee collection), so pausing
-    ///         can never trap a holder's or creator's funds.
+    ///         curve, migration, withdrawals, fee collection and claims), so
+    ///         pausing can never trap a holder's or creator's funds.
     function pause() external onlyOwner {
         _pause();
     }

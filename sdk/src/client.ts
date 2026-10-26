@@ -7,6 +7,8 @@ import {
   Address,
   Hash,
   zeroAddress,
+  ContractFunctionArgs,
+  WriteContractParameters,
 } from "viem";
 import { AuctionBuilder } from "./builders/auction-builder";
 import { AuctionConfig, AuctionData, BuyQuote, MigrationInfo, SellQuote, SupportedChainId } from "./types";
@@ -238,11 +240,25 @@ export class AuctionFlowSDK {
   }
 
   /**
-   * Collect the migrated pool's trading fees. The protocol takes its share and
-   * the creator receives the rest. Anyone may call it.
+   * Collect the migrated pool's trading fees. The protocol's share accrues to
+   * the protocol and the rest is credited to the creator, who withdraws it
+   * with `claim`. Anyone may call it.
    */
   async collectFees(auctionId: bigint): Promise<Hash> {
     return this.write("collectFees", [auctionId]);
+  }
+
+  /**
+   * Withdraw everything credited to the connected account in `token`: a
+   * creator's share of pool fees, and any reserve migration couldn't place.
+   */
+  async claim(token: Address): Promise<Hash> {
+    return this.write("claim", [token]);
+  }
+
+  /** Send the protocol's unclaimed fees in `token` to the fee recipient. Anyone may call it. */
+  async claimProtocolFees(token: Address): Promise<Hash> {
+    return this.write("claimProtocolFees", [token]);
   }
 
   /** The Uniswap pool and position for a migrated auction. */
@@ -267,7 +283,10 @@ export class AuctionFlowSDK {
     };
   }
 
-  private async write(functionName: "migrate" | "collectFees", args: readonly [bigint]): Promise<Hash> {
+  private async write<F extends "migrate" | "collectFees" | "claim" | "claimProtocolFees">(
+    functionName: F,
+    args: ContractFunctionArgs<typeof tokenAuctionAbi, "nonpayable", F>
+  ): Promise<Hash> {
     if (!this.walletClient) throw new Error("Wallet client required");
     return this.walletClient.writeContract({
       chain: this.chain,
@@ -276,7 +295,7 @@ export class AuctionFlowSDK {
       abi: tokenAuctionAbi,
       functionName,
       args,
-    });
+    } as WriteContractParameters<typeof tokenAuctionAbi, F>);
   }
 
   // Read: Has an auction's creator already withdrawn its proceeds?
@@ -290,12 +309,43 @@ export class AuctionFlowSDK {
   }
 
   // Read: Is the protocol paused? While paused, launches and curve buys
-  // revert; selling back, migration, withdrawals and fee collection still work.
+  // revert; selling back, migration, withdrawals, fee collection and claims
+  // still work.
   async isPaused(): Promise<boolean> {
     return this.publicClient.readContract({
       address: this.auctionAddress,
       abi: tokenAuctionAbi,
       functionName: "paused",
+    }) as Promise<boolean>;
+  }
+
+  // Read: How much of `token` is credited to `account`, waiting for `claim`?
+  async getClaimable(token: Address, account: Address): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "claimable",
+      args: [token, account],
+    }) as Promise<bigint>;
+  }
+
+  // Read: Protocol fees in `token` earned and not yet claimed.
+  async getProtocolFees(token: Address): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "protocolFees",
+      args: [token],
+    }) as Promise<bigint>;
+  }
+
+  // Read: May new auctions be priced in `token`?
+  async isPaymentTokenAllowed(token: Address): Promise<boolean> {
+    return this.publicClient.readContract({
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "paymentTokenAllowed",
+      args: [token],
     }) as Promise<boolean>;
   }
 

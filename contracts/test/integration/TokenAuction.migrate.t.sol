@@ -59,6 +59,7 @@ contract TokenAuctionMigrateTest is Test {
         auction = new TokenAuction(
             makeAddr("feeRecipient"), 250, INonfungiblePositionManager(address(new RejectingPositionManager()))
         );
+        auction.setPaymentTokenAllowed(address(usdc), true);
         usdc.transfer(buyer, 1_000e6);
     }
 
@@ -99,7 +100,8 @@ contract TokenAuctionMigrateTest is Test {
 
     /// If Uniswap rejects the position, migration still completes: the token
     /// unlocks, its supply is fixed, unused tokens are burned and the reserved
-    /// funds go to the creator. Buyers are never left holding locked tokens.
+    /// funds are credited to the creator. Buyers are never left holding
+    /// locked tokens.
     function test_migrate_neverStrandsTokensWhenUniswapRejects() public {
         uint256 id = _createAuction();
         _graduate(id);
@@ -118,8 +120,17 @@ contract TokenAuctionMigrateTest is Test {
         assertEq(token.owner(), address(0), "ownership renounced: supply fixed for good");
         assertEq(token.totalSupply(), sold, "liquidity tokens minted then burned");
         assertEq(auction.positionId(id), 0, "no position");
-        assertEq(usdc.balanceOf(creator), liquidityShare, "reserved funds returned to the creator");
-        assertEq(auction.custodied(address(usdc)), MAX_RAISE - liquidityShare, "creator's own share still owed");
+        assertEq(auction.claimable(address(usdc), creator), liquidityShare, "reserved funds credited to the creator");
+        uint256 fees = auction.protocolFees(address(usdc));
+        assertEq(auction.custodied(address(usdc)), MAX_RAISE + fees, "creator's share, the credit and fees still owed");
+
+        vm.expectEmit(true, true, false, true);
+        emit TokenAuction.Claimed(address(usdc), creator, liquidityShare);
+        vm.prank(creator);
+        auction.claim(usdc);
+        assertEq(usdc.balanceOf(creator), liquidityShare, "creator claimed the reserve");
+        assertEq(auction.claimable(address(usdc), creator), 0);
+        assertEq(auction.custodied(address(usdc)), MAX_RAISE - liquidityShare + fees);
 
         vm.prank(buyer);
         token.transfer(stranger, 1e18); // tradeable
