@@ -5,11 +5,12 @@ import "./BondingCurve.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./interfaces/IUniswapV3.sol";
 
-contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
+contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3SwapCallback {
     using SafeERC20 for IERC20;
 
     enum AuctionState { PENDING, ACTIVE, COMPLETED, MIGRATED }
@@ -193,7 +194,7 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     /// @notice Launch a token with custom curve parameters. Trading starts
     ///         immediately; the token graduates to Uniswap once `maxRaise` is
     ///         raised.
-    function createAuction(AuctionParams calldata p) external returns (uint256 auctionId) {
+    function createAuction(AuctionParams calldata p) external whenNotPaused returns (uint256 auctionId) {
         return _createAuction(p);
     }
 
@@ -201,6 +202,7 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     ///         everything else from the protocol's standard preset.
     function launch(string calldata name, string calldata symbol, string calldata metadataURI)
         external
+        whenNotPaused
         returns (uint256 auctionId)
     {
         LaunchPreset memory s = launchPreset;
@@ -292,7 +294,7 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     ///        remaining budget buys and closes the auction, so the buyer may
     ///        receive less than `amount`; `TokensPurchased` reports the actual
     ///        amount.
-    function buyTokens(uint256 auctionId, uint256 amount, uint256 maxCost) external nonReentrant {
+    function buyTokens(uint256 auctionId, uint256 amount, uint256 maxCost) external nonReentrant whenNotPaused {
         AuctionData storage auction = auctions[auctionId];
         require(auction.state == AuctionState.ACTIVE, "Auction not active");
         require(amount > 0, "Zero amount");
@@ -467,11 +469,12 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         m.token = auction.config.token;
         m.payment = auction.config.paymentToken;
         m.tokenIsToken0 = address(m.token) < address(m.payment);
-        m.paymentFloor = m.payment.balanceOf(address(this)) - paymentBudget;
 
         // Effects before interactions.
         auction.state = AuctionState.MIGRATED;
         custodied[address(m.payment)] -= paymentBudget;
+
+        m.paymentFloor = m.payment.balanceOf(address(this)) - paymentBudget;
 
         m.token.enableTransfers();
 
@@ -685,7 +688,7 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     /// @notice Recover tokens held above what is owed to auction creators,
     ///         such as tokens transferred to this contract directly. Funds
     ///         backing an unwithdrawn auction can never be swept.
-    function sweep(IERC20 token, address to) external onlyOwner nonReentrant {
+    function sweep(IERC20 token, address to) external nonReentrant onlyOwner {
         require(to != address(0), "Zero recipient");
         uint256 balance = token.balanceOf(address(this));
         uint256 owed = custodied[address(token)];
@@ -694,6 +697,18 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         uint256 excess = balance - owed;
         token.safeTransfer(to, excess);
         emit Swept(address(token), to, excess);
+    }
+
+    /// @notice Emergency stop for new money: blocks launches and curve buys.
+    ///         Every way out keeps working while paused (selling back to the
+    ///         curve, migration, withdrawals and fee collection), so pausing
+    ///         can never trap a holder's or creator's funds.
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
     }
 
     // View functions

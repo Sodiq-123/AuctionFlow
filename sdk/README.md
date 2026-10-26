@@ -247,6 +247,7 @@ Early buyers pay less; later buyers pay more.
 | `withdrawProceeds(auctionId)` | Pay the creator their share of the raise (what isn't reserved for liquidity). Creator-only, once. |
 | `collectFees(auctionId)` | Collect the pool's trading fees: protocol share to the protocol, the rest to the creator. Anyone may call. |
 | `hasWithdrawnProceeds(auctionId)` | Whether the creator has already claimed the proceeds. |
+| `isPaused()` | Whether the protocol is paused. While paused, `launch`, `createAuction` and `buyTokens` revert; selling back, migration, withdrawals and fee collection still work. |
 
 ## License
 

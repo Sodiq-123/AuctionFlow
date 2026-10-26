@@ -289,6 +289,16 @@ export class AuctionFlowSDK {
     }) as Promise<boolean>;
   }
 
+  // Read: Is the protocol paused? While paused, launches and curve buys
+  // revert; selling back, migration, withdrawals and fee collection still work.
+  async isPaused(): Promise<boolean> {
+    return this.publicClient.readContract({
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "paused",
+    }) as Promise<boolean>;
+  }
+
   // Read: Get auction data
   async getAuction(auctionId: bigint): Promise<AuctionData> {
     const result = await this.publicClient.readContract({

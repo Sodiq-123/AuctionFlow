@@ -216,4 +216,27 @@ contract TokenAuctionAdminTest is Test {
         auction.buyTokens(id, 1_000e18, type(uint256).max);
         vm.stopPrank();
     }
+
+    // --- ownership ------------------------------------------------------------
+
+    /// Ownership moves in two steps, so a mistyped address (say, a Safe on the
+    /// wrong chain) can't take the contract: nothing changes until the new
+    /// owner accepts.
+    function test_transferOwnership_takesEffectOnlyWhenAccepted() public {
+        auction.transferOwnership(treasury);
+        assertEq(auction.owner(), address(this), "still the old owner");
+        assertEq(auction.pendingOwner(), treasury);
+
+        vm.prank(treasury);
+        auction.acceptOwnership();
+        assertEq(auction.owner(), treasury);
+        assertEq(auction.pendingOwner(), address(0));
+    }
+
+    function test_acceptOwnership_onlyPendingOwner() public {
+        auction.transferOwnership(treasury);
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        auction.acceptOwnership();
+    }
 }
