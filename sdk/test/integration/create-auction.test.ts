@@ -8,7 +8,7 @@ function validBuilder() {
   return new AuctionBuilder()
     .withToken("MyToken", "MTK", 1_000_000n)
     .withPaymentToken(USDC_SEPOLIA)
-    .withBondingCurve(1_000_000n, 1_000n)
+    .withBondingCurve(1_000_000n * 10n ** 18n, 1_000n * 10n ** 18n)
     .withMaxRaise(50_000_000n)
     .withMetadata("ipfs://my-token");
 }
@@ -21,8 +21,8 @@ describe("AuctionBuilder", () => {
       symbol: "MTK",
       maxSupply: 1_000_000n,
       paymentToken: USDC_SEPOLIA,
-      basePrice: 1_000_000n,
-      slope: 1_000n,
+      basePrice: 1_000_000n * 10n ** 18n,
+      slope: 1_000n * 10n ** 18n,
       maxRaise: 50_000_000n,
       metadataURI: "ipfs://my-token",
     });
@@ -50,7 +50,7 @@ describe("AuctionBuilder", () => {
   });
 
   it("rejects a non-positive basePrice", () => {
-    expect(() => validBuilder().withBondingCurve(0n, 1_000n).build()).toThrow(
+    expect(() => validBuilder().withBondingCurve(0n, 1_000n * 10n ** 18n).build()).toThrow(
       /basePrice must be greater than 0/
     );
   });

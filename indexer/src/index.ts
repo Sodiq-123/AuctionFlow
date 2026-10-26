@@ -2,9 +2,11 @@ import { ponder } from "ponder:registry";
 import * as schema from "../ponder.schema";
 import { zeroAddress } from "viem";
 
-// Mirrors BondingCurve.TOKEN_SCALE: prices are per whole token, supplies and
-// amounts are in token wei (18 decimals).
+// Mirrors BondingCurve: supplies and amounts are in token wei (18 decimals);
+// prices are payment units per whole token with 18 extra decimals (WAD), so
+// currentPrice and pricePerToken are both in those units.
 const TOKEN_SCALE = 10n ** 18n;
+const SCALE = TOKEN_SCALE * 10n ** 18n;
 
 // ─── AuctionCreated ───
 
@@ -88,8 +90,8 @@ async function recordTrade({ event, context }: any, t: TradeArgs) {
     ? auctionRecord.basePrice + (auctionRecord.slope * t.newTotalSold) / TOKEN_SCALE
     : 0n;
 
-  // Average price per whole token for this trade, in payment-token units.
-  const pricePerToken = t.amount > 0n ? (t.value * TOKEN_SCALE) / t.amount : 0n;
+  // Average price per whole token for this trade, in WAD like the curve's prices.
+  const pricePerToken = t.amount > 0n ? (t.value * SCALE) / t.amount : 0n;
 
   await db.insert(schema.trade).values({
     id: tradeId,

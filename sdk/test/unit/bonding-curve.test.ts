@@ -8,50 +8,54 @@ import {
   fillPurchase,
   calculateSellProceeds,
   applySellSlippage,
+  parseCurvePrice,
+  formatCurvePrice,
 } from "../../src/utils/bonding-curve";
 
 const T = 10n ** 18n;
+// Prices are payment units per whole token × 1e18: 1_000_000n * P is 1 USDC.
+const P = 10n ** 18n;
 
 describe("calculateBuyCost", () => {
   it("matches solidity calculation for 2 tokens from supply=0", () => {
-    const cost = calculateBuyCost(0n, 2n * T, 1_000_000n, 1_000n);
+    const cost = calculateBuyCost(0n, 2n * T, 1_000_000n * P, 1_000n * P);
     expect(cost).toBe(2_002_000n);
   });
 
   it("is more expensive to buy the same amount from a higher supply", () => {
-    const early = calculateBuyCost(0n, 1_000n * T, 1_000_000n, 1_000n);
-    const later = calculateBuyCost(1_000_000n * T, 1_000n * T, 1_000_000n, 1_000n);
+    const early = calculateBuyCost(0n, 1_000n * T, 1_000_000n * P, 1_000n * P);
+    const later = calculateBuyCost(1_000_000n * T, 1_000n * T, 1_000_000n * P, 1_000n * P);
     expect(later).toBeGreaterThan(early);
   });
 
   it("returns only the linear term when slope is 0", () => {
-    expect(calculateBuyCost(500n * T, 3n * T, 1_000_000n, 0n)).toBe(3_000_000n);
+    expect(calculateBuyCost(500n * T, 3n * T, 1_000_000n * P, 0n)).toBe(3_000_000n);
   });
 });
 
 describe("spotPrice", () => {
   it("equals basePrice at supply 0", () => {
-    expect(spotPrice(0n, 1_000_000n, 1_000n)).toBe(1_000_000n);
+    expect(spotPrice(0n, 1_000_000n * P, 1_000n * P)).toBe(1_000_000n * P);
   });
 
   it("increases linearly with supply", () => {
-    expect(spotPrice(10n * T, 1_000_000n, 1_000n)).toBe(1_010_000n);
+    expect(spotPrice(10n * T, 1_000_000n * P, 1_000n * P)).toBe(1_010_000n * P);
   });
 });
 
 describe("calculateBuyQuote", () => {
   it("adds the protocol fee on top of the raw cost", () => {
     // 250 bps = 2.5%
-    const quote = calculateBuyQuote(0n, 2n * T, 1_000_000n, 1_000n, 250n);
+    const quote = calculateBuyQuote(0n, 2n * T, 1_000_000n * P, 1_000n * P, 250n);
     expect(quote.cost).toBe(2_002_000n);
     expect(quote.fee).toBe((2_002_000n * 250n) / 10_000n);
     expect(quote.total).toBe(quote.cost + quote.fee);
   });
 
   it("reports the spot price after the purchase settles", () => {
-    const quote = calculateBuyQuote(100n * T, 50n * T, 1_000_000n, 1_000n, 0n);
+    const quote = calculateBuyQuote(100n * T, 50n * T, 1_000_000n * P, 1_000n * P, 0n);
     expect(quote.fee).toBe(0n);
-    expect(quote.spotPriceAfter).toBe(spotPrice(150n * T, 1_000_000n, 1_000n));
+    expect(quote.spotPriceAfter).toBe(spotPrice(150n * T, 1_000_000n * P, 1_000n * P));
   });
 });
 
@@ -79,26 +83,26 @@ describe("applySlippage", () => {
 describe("rounding", () => {
   it("rounds up, matching the contract, so nothing is free", () => {
     // 1 token wei at 0.01 USDC is worth 1e-14 USDC units: each term rounds up to 1.
-    expect(calculateBuyCost(0n, 1n, 10_000n, 1n)).toBe(2n);
+    expect(calculateBuyCost(0n, 1n, 10_000n * P, P)).toBe(2n);
   });
 });
 
 describe("maxBuyable", () => {
   it("finds the largest affordable amount", () => {
-    const a = maxBuyable(0n, 10_500_000n, 10_000n, 1n, 10n ** 30n);
-    expect(calculateBuyCost(0n, a, 10_000n, 1n)).toBeLessThanOrEqual(10_500_000n);
-    expect(calculateBuyCost(0n, a + T, 10_000n, 1n)).toBeGreaterThan(10_500_000n);
+    const a = maxBuyable(0n, 10_500_000n, 10_000n * P, P, 10n ** 30n);
+    expect(calculateBuyCost(0n, a, 10_000n * P, P)).toBeLessThanOrEqual(10_500_000n);
+    expect(calculateBuyCost(0n, a + T, 10_000n * P, P)).toBeGreaterThan(10_500_000n);
     expect(a / T).toBe(1000n); // the walkthrough's 10.5 USDC buys 1,000 tokens
   });
 
   it("respects the upper bound", () => {
-    expect(maxBuyable(0n, 10n ** 12n, 10_000n, 1n, 5n * T)).toBe(5n * T);
+    expect(maxBuyable(0n, 10n ** 12n, 10_000n * P, P, 5n * T)).toBe(5n * T);
   });
 });
 
 describe("fillPurchase", () => {
-  const BASE = 10_000n; // 0.01 USDC
-  const SLOPE = 1n;
+  const BASE = 10_000n * P; // 0.01 USDC
+  const SLOPE = P; // +0.000001 USDC per token sold
 
   it("fills the full request when it stays under the cap", () => {
     const f = fillPurchase(0n, 100n * T, BASE, SLOPE, 0n, 10_500_000n);
@@ -126,8 +130,8 @@ describe("fillPurchase", () => {
 });
 
 describe("calculateSellProceeds", () => {
-  const BASE = 10_000n;
-  const SLOPE = 1n;
+  const BASE = 10_000n * P;
+  const SLOPE = P; // +0.000001 USDC per token sold
 
   it("pays the same integral a purchase costs, when there is no remainder", () => {
     // Buying 1,000 from 0 costs exactly 10.5 USDC; selling them back pays it.
@@ -166,5 +170,23 @@ describe("applySellSlippage", () => {
 
   it("rejects tolerances outside 0..10000 bps", () => {
     expect(() => applySellSlippage(1n, 10_001)).toThrow(/slippageBps/);
+  });
+});
+
+describe("price precision", () => {
+  it("expresses a pump.fun-shaped curve, matching the contract test", () => {
+    // 1B-token launch: $0.000005 rising to $0.00007 over 800M tokens sold.
+    const base = 5n * P;
+    const slope = 81_250_000_000n; // 8.125e-8 USDC units per token, × 1e18
+    const sold = 800_000_000n * T;
+    expect(spotPrice(sold, base, slope)).toBe(70n * P);
+    expect(calculateBuyCost(0n, sold, base, slope)).toBe(30_000n * 1_000_000n); // $30,000
+  });
+
+  it("converts human prices to and from curve units", () => {
+    expect(parseCurvePrice("0.01", 6)).toBe(10_000n * P);
+    // The pump.fun slope above: +0.00000000000008125 USDC per token sold.
+    expect(parseCurvePrice("0.00000000000008125", 6)).toBe(81_250_000_000n);
+    expect(formatCurvePrice(70n * P, 6)).toBe("0.00007");
   });
 });

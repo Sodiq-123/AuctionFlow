@@ -190,7 +190,7 @@ pnpm add auctionflow-sdk viem
 ### Usage
 
 ```typescript
-import { AuctionFlowSDK } from "auctionflow-sdk";
+import { AuctionFlowSDK, parseCurvePrice } from "auctionflow-sdk";
 import { createWalletClient, http, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
@@ -218,8 +218,8 @@ const config = sdk
   .withToken("MyToken", "MTK", parseUnits("1000000", 18))
   .withPaymentToken("0x036CbD53842c5426634e7929541eC2318f3dCF7e") // USDC Sepolia
   .withBondingCurve(
-    parseUnits("0.01", 6),      // base price: 0.01 USDC
-    parseUnits("0.000001", 6)   // slope
+    parseCurvePrice("0.01", 6),      // base price: 0.01 USDC per token
+    parseCurvePrice("0.000001", 6)   // slope: +0.000001 USDC per token sold
   )
   .withMaxRaise(parseUnits("50000", 6)) // graduation threshold
   .build();

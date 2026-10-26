@@ -17,8 +17,8 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     struct AuctionConfig {
         AuctionToken token;           // The token being auctioned
         IERC20 paymentToken;          // e.g., USDC
-        uint256 basePrice;            // Starting price in payment token units
-        uint256 slope;                // Bonding curve slope
+        uint256 basePrice;            // Price of the first whole token: payment units × 1e18
+        uint256 slope;                // Price rise per whole token sold: payment units × 1e18
         uint256 maxRaise;             // Graduation threshold: raise at which trading moves to Uniswap
         address creator;              // Token creator address
         uint256 protocolFeeBps;       // Protocol fee in basis points (e.g., 250 = 2.5%)
@@ -34,8 +34,8 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
         string metadataURI;           // Off-chain metadata, e.g. the token image
         uint256 maxSupply;            // Token supply cap, in token wei
         address paymentToken;         // e.g. USDC
-        uint256 basePrice;            // Price of the first whole token, in payment-token units
-        uint256 slope;                // Price rise per whole token sold
+        uint256 basePrice;            // Price of the first whole token: payment units × 1e18
+        uint256 slope;                // Price rise per whole token sold: payment units × 1e18
         uint256 maxRaise;             // Graduation threshold: trading moves to Uniswap once raised
         uint256 liquidityBps;         // Share of the raise seeded into Uniswap at migration
     }
@@ -76,6 +76,14 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     ///         Uniswap pool, so no launch ships with a token too thinly
     ///         traded to be usable.
     uint256 public constant MIN_LIQUIDITY_BPS = 2000; // 20%
+
+    /// @dev Parameter bounds that keep every curve computation inside
+    ///      uint256: supply up to 10^18 whole tokens, prices up to 10^27
+    ///      payment units per token, and raises up to 10^40 units. All far
+    ///      beyond any real launch.
+    uint256 internal constant MAX_SUPPLY_BOUND = 1e36;
+    uint256 internal constant MAX_PRICE_PARAM = 1e45;
+    uint256 internal constant MAX_RAISE_BOUND = 1e40;
 
     /// @notice Payment tokens this contract owes to auction creators, per token:
     ///         the sum of `totalRaised` across auctions not yet withdrawn.
@@ -260,12 +268,16 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
             "Invalid liquidity share"
         );
 
-        require(!_curveOverflows(maxSupply, basePrice, slope, maxRaise), "Curve overflows");
+        require(
+            maxSupply <= MAX_SUPPLY_BOUND && basePrice <= MAX_PRICE_PARAM && slope <= MAX_PRICE_PARAM
+                && maxRaise <= MAX_RAISE_BOUND,
+            "Curve overflows"
+        );
 
         uint256 soldOut = BondingCurve.maxBuyable(0, maxRaise, basePrice, slope, maxSupply);
         uint256 finalPrice = BondingCurve.spotPrice(soldOut, basePrice, slope);
         uint256 reserve = Math.mulDiv(
-            (maxRaise * liquidityBps) / 10000, BondingCurve.TOKEN_SCALE, finalPrice, Math.Rounding.Ceil
+            (maxRaise * liquidityBps) / 10000, BondingCurve.SCALE, finalPrice, Math.Rounding.Ceil
         );
         require(soldOut + reserve <= maxSupply, "Supply too small for liquidity");
     }
@@ -447,7 +459,9 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
 
         uint256 paymentBudget = _liquidityShare(auction);
         uint256 price = BondingCurve.spotPrice(auction.totalSold, auction.config.basePrice, auction.config.slope);
-        uint256 tokenBudget = Math.mulDiv(paymentBudget, BondingCurve.TOKEN_SCALE, price);
+        // Tokens worth the payment budget at the final price, so both sides of
+        // the pool are worth the same. `price` is WAD, hence SCALE.
+        uint256 tokenBudget = Math.mulDiv(paymentBudget, BondingCurve.SCALE, price);
 
         Migration memory m;
         m.token = auction.config.token;
@@ -549,6 +563,8 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
 
         (address t0, address t1) = _sorted(m);
         _activePool = address(pool);
+        // `input` is at most the payment or token budget, both capped far below
+        // 2^255 by _validateCurve's bounds, so the cast can't wrap negative.
         pool.swap(address(this), zeroForOne, int256(input), m.targetSqrtPrice, abi.encode(t0, t1));
         _activePool = address(0);
 
@@ -609,33 +625,18 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     }
 
     /// @dev Uniswap prices are token1 per token0 in raw units, as
-    ///      sqrt(price) * 2^96. `price` is payment-token units per whole token
-    ///      (1e18 token wei).
+    ///      sqrt(price) * 2^96. `price` is payment units per whole token, WAD,
+    ///      so payment wei per token wei is price / 1e36. Working from the WAD
+    ///      price opens the pool at the curve's exact final price: rounding to
+    ///      whole payment units could open it below, the direction that sells
+    ///      the locked liquidity cheaply.
     function _sqrtPriceX96(uint256 price, bool tokenIsToken0) internal pure returns (uint160) {
         uint256 ratioX192 = tokenIsToken0
-            ? Math.mulDiv(price, 1 << 192, BondingCurve.TOKEN_SCALE)
-            : Math.mulDiv(BondingCurve.TOKEN_SCALE, 1 << 192, price);
+            ? Math.mulDiv(price, 1 << 192, BondingCurve.SCALE)
+            : Math.mulDiv(BondingCurve.SCALE, 1 << 192, price);
         uint256 sqrtPrice = Math.sqrt(ratioX192);
         require(sqrtPrice > MIN_SQRT_RATIO && sqrtPrice < MAX_SQRT_RATIO, "Price outside Uniswap range");
         return uint160(sqrtPrice);
-    }
-
-    /// @dev Whether the largest intermediate products the curve can compute
-    ///      during this auction would exceed uint256: basePrice * supply in the
-    ///      linear term, slope * supply * 2 * supply in the quadratic term, and
-    ///      maxRaise scaled to token wei when searching for the sold-out point.
-    function _curveOverflows(uint256 maxSupply, uint256 basePrice, uint256 slope, uint256 maxRaise)
-        internal
-        pure
-        returns (bool)
-    {
-        if (maxSupply > type(uint128).max) return true;
-        (bool ok, ) = Math.tryMul(basePrice, maxSupply);
-        if (!ok) return true;
-        (ok, ) = Math.tryMul(slope, maxSupply * 2 * maxSupply);
-        if (!ok) return true;
-        (ok, ) = Math.tryMul(maxRaise, BondingCurve.TOKEN_SCALE);
-        return !ok;
     }
 
     /// @notice Change where protocol fees are sent. Applies to purchases made
@@ -690,6 +691,7 @@ contract TokenAuction is ReentrancyGuard, Ownable, IUniswapV3SwapCallback {
     }
 
     // View functions
+    /// @notice Price of the next whole token, in payment units × 1e18.
     function getSpotPrice(uint256 auctionId) external view returns (uint256) {
         AuctionData storage auction = auctions[auctionId];
         return BondingCurve.spotPrice(

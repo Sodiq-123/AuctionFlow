@@ -1,11 +1,33 @@
+import { formatUnits, parseUnits } from "viem";
+
 /**
- * Off-chain bonding curve calculations (mirrors BondingCurve.sol)
+ * Off-chain bonding curve calculations (mirrors BondingCurve.sol).
  *
- * `basePrice` and `slope` are denominated in payment-token units per *whole*
- * token, while supplies and amounts are in token wei (18 decimals). Every term
- * is normalised by TOKEN_SCALE so results come back in payment-token units.
+ * Units: supplies and amounts are in token wei (18 decimals). `basePrice`,
+ * `slope` and spot prices are payment-token units per whole token as
+ * fixed-point numbers with 18 extra decimals (WAD), so a curve can rise by far
+ * less than one payment unit per token. Costs and proceeds come back in plain
+ * payment-token units. Use `parseCurvePrice` / `formatCurvePrice` to convert.
  */
 const TOKEN_SCALE = 10n ** 18n;
+
+/** Fixed-point scale of `basePrice`, `slope` and spot prices. */
+export const PRICE_SCALE = 10n ** 18n;
+
+const SCALE = TOKEN_SCALE * PRICE_SCALE;
+
+/**
+ * A human-readable price per whole token, in curve units.
+ * `parseCurvePrice("0.01", 6)` is 0.01 USDC per token.
+ */
+export function parseCurvePrice(price: string, paymentDecimals: number): bigint {
+  return parseUnits(price, paymentDecimals + 18);
+}
+
+/** A curve price (e.g. from `getSpotPrice`) as a human-readable price per whole token. */
+export function formatCurvePrice(price: bigint, paymentDecimals: number): string {
+  return formatUnits(price, paymentDecimals + 18);
+}
 
 const ceilDiv = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
 
@@ -16,10 +38,10 @@ export function calculateBuyCost(
   slope: bigint
 ): bigint {
   // Rounds up, like the contract, so a purchase always pays at least the exact price.
-  const linearCost = ceilDiv(basePrice * amount, TOKEN_SCALE);
+  const linearCost = ceilDiv(basePrice * amount, SCALE);
   const curveCost = ceilDiv(
     slope * amount * (2n * currentSupply + amount),
-    2n * TOKEN_SCALE * TOKEN_SCALE
+    2n * SCALE * TOKEN_SCALE
   );
   return linearCost + curveCost;
 }
@@ -37,11 +59,12 @@ export function calculateSellProceeds(
 ): bigint {
   if (amount > currentSupply) throw new Error("Cannot sell more than is outstanding");
   const from = currentSupply - amount;
-  const linear = (basePrice * amount) / TOKEN_SCALE;
-  const curve = (slope * amount * (2n * from + amount)) / (2n * TOKEN_SCALE * TOKEN_SCALE);
+  const linear = (basePrice * amount) / SCALE;
+  const curve = (slope * amount * (2n * from + amount)) / (2n * SCALE * TOKEN_SCALE);
   return linear + curve;
 }
 
+/** Price of the next whole token, in curve units (payment units × 1e18). */
 export function spotPrice(
   currentSupply: bigint,
   basePrice: bigint,
@@ -92,7 +115,7 @@ export function maxBuyable(
   slope: bigint,
   upperBound: bigint
 ): bigint {
-  let hi = (budget * TOKEN_SCALE) / basePrice + 1n;
+  let hi = (budget * SCALE) / basePrice + 1n;
   if (hi > upperBound) hi = upperBound;
   let lo = 0n;
   while (lo < hi) {

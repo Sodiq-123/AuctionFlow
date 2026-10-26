@@ -46,8 +46,8 @@ abstract contract MigrateForkBase is Test {
     uint256 constant FORK_BLOCK = 52_984_000;
     uint24 constant FEE = 10000;
 
-    uint256 constant BASE_PRICE = 1e4; // 0.01 USDC per token
-    uint256 constant SLOPE = 1;
+    uint256 constant BASE_PRICE = 1e22; // 0.01 USDC per token (payment units × 1e18)
+    uint256 constant SLOPE = 1e18; // +0.000001 USDC per token sold (× 1e18)
     uint256 constant MAX_RAISE = 10_500_000; // 10.5 USDC: exactly 1,000 tokens
     uint256 constant LIQUIDITY_BPS = 5_000;
     uint256 constant LP_FEE_SHARE_BPS = 2_000;
@@ -131,17 +131,19 @@ abstract contract MigrateForkBase is Test {
     }
 
     /// Same encoding as TokenAuction._sqrtPriceX96, for setting up pools.
+    /// `price` is payment units per whole token × 1e18, so payment wei per
+    /// token wei is price / 1e36.
     function _sqrtPriceX96(uint256 price, bool tokenIsToken0) internal pure returns (uint160) {
         uint256 ratioX192 =
-            tokenIsToken0 ? Math.mulDiv(price, 1 << 192, 1e18) : Math.mulDiv(1e18, 1 << 192, price);
+            tokenIsToken0 ? Math.mulDiv(price, 1 << 192, 1e36) : Math.mulDiv(1e36, 1 << 192, price);
         return uint160(Math.sqrt(ratioX192));
     }
 
-    /// The pool's price, as payment-token units per whole auction token.
+    /// The pool's price, as payment units per whole auction token × 1e18.
     function _poolPrice(address pool, AuctionToken token) internal view returns (uint256) {
         (uint160 sqrtP,,,,,,) = IUniswapV3Pool(pool).slot0();
         uint256 sq = uint256(sqrtP) * sqrtP;
-        return _tokenIsToken0(token) ? Math.mulDiv(sq, 1e18, 1 << 192) : Math.mulDiv(1 << 192, 1e18, sq);
+        return _tokenIsToken0(token) ? Math.mulDiv(sq, 1e36, 1 << 192) : Math.mulDiv(1 << 192, 1e36, sq);
     }
 
     /// An attacker initialises the pool before migration, at `price`.

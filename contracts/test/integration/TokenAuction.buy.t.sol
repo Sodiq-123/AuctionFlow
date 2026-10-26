@@ -20,8 +20,8 @@ contract TokenAuctionBuyTest is Test {
     address buyer = makeAddr("buyer");
 
     uint256 constant FEE_BPS = 250; // 2.5%
-    uint256 constant BASE_PRICE = 1e6;
-    uint256 constant SLOPE = 1e3;
+    uint256 constant BASE_PRICE = 1e24; // 1 USDC per token (payment units × 1e18)
+    uint256 constant SLOPE = 1e21;      // +0.001 USDC per token sold (× 1e18)
     uint256 constant MAX_RAISE = 50_000e6;
 
     function setUp() public {

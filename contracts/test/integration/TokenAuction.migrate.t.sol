@@ -71,8 +71,8 @@ contract TokenAuctionMigrateTest is Test {
                 metadataURI: "",
                 maxSupply: 1_000_000_000e18,
                 paymentToken: address(usdc),
-                basePrice: 1e4,
-                slope: 1,
+                basePrice: 1e22, // 0.01 USDC per token (× 1e18)
+                slope: 1e18,
                 maxRaise: MAX_RAISE,
                 liquidityBps: 5_000
             })

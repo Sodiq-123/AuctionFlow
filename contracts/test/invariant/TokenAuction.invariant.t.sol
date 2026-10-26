@@ -106,8 +106,8 @@ contract TokenAuctionInvariantTest is Test {
     address creator = makeAddr("creator");
     address feeRecipient = makeAddr("feeRecipient");
 
-    uint256 constant BASE_PRICE = 1e6;
-    uint256 constant SLOPE = 1e3;
+    uint256 constant BASE_PRICE = 1e24; // 1 USDC per token (payment units × 1e18)
+    uint256 constant SLOPE = 1e21;      // +0.001 USDC per token sold (× 1e18)
     uint256 constant MAX_RAISE = 1e10; // 10,000 USDC — reachable under fuzzing
     uint256 constant MAX_SUPPLY = 1_000_000_000e18;
 

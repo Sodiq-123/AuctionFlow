@@ -17,7 +17,7 @@ pnpm add auctionflow-sdk viem
 ## Quick start
 
 ```typescript
-import { AuctionFlowSDK } from "auctionflow-sdk";
+import { AuctionFlowSDK, parseCurvePrice } from "auctionflow-sdk";
 import { createWalletClient, http, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
@@ -85,8 +85,8 @@ const config = sdk
   .withToken("MyToken", "MTK", parseUnits("1000000", 18))
   .withPaymentToken("0x036CbD53842c5426634e7929541eC2318f3dCF7e") // USDC Sepolia
   .withBondingCurve(
-    parseUnits("0.01", 6), // base price: 0.01 USDC
-    parseUnits("0.000001", 6) // slope
+    parseCurvePrice("0.01", 6), // base price: 0.01 USDC per token
+    parseCurvePrice("0.000001", 6) // slope: +0.000001 USDC per token sold
   )
   .withMaxRaise(parseUnits("50000", 6)) // graduation threshold
   .withLiquidity(5_000) // 50% of the raise seeds the Uniswap pool (the default)
@@ -95,6 +95,12 @@ const config = sdk
 
 const hash = await sdk.createAuction(config);
 ```
+
+Prices are per whole token, stored with 18 extra decimals so a curve can rise
+by far less than one USDC unit per token, as a billion-token memecoin needs.
+`parseCurvePrice(price, paymentDecimals)` converts a human price into those
+units, and `formatCurvePrice` converts back (for example, a `getSpotPrice`
+result for display).
 
 `withLiquidity` sets the share of the raise, in basis points, that is paired
 with newly minted tokens to open a Uniswap pool when the auction ends; the
@@ -162,7 +168,7 @@ console.log(quote.cost, quote.fee, quote.totalCost, quote.spotPriceAfter);
 The bonding-curve helpers are also exported directly for UI/preview use:
 
 ```typescript
-import { calculateBuyQuote, calculateSellProceeds, spotPrice } from "auctionflow-sdk";
+import { calculateBuyQuote, calculateSellProceeds, spotPrice, formatCurvePrice } from "auctionflow-sdk";
 ```
 
 ## After graduation: migrate, withdraw, collect fees

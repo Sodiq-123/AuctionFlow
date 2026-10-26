@@ -10,7 +10,7 @@
 import { createWalletClient, http, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
-import { AuctionFlowSDK } from "../sdk/src";
+import { AuctionFlowSDK, parseCurvePrice } from "../sdk/src";
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
 const RPC_URL = process.env.RPC_URL ?? "https://sepolia.base.org";
@@ -47,8 +47,8 @@ async function main() {
     )
     .withPaymentToken("0x036CbD53842c5426634e7929541eC2318f3dCF7e") // USDC on Base Sepolia
     .withBondingCurve(
-      parseUnits("0.01", 6),     // base price: 0.01 USDC
-      parseUnits("0.000001", 6)  // slope
+      parseCurvePrice("0.01", 6),     // base price: 0.01 USDC per token
+      parseCurvePrice("0.000001", 6)  // slope: +0.000001 USDC per token sold
     )
     .withMaxRaise(parseUnits("50000", 6)) // graduates at 50k USDC raised
     .withMetadata("ipfs://your-token-metadata")
