@@ -38,6 +38,21 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # The publish step has exited 0 without publishing (sdk-v3.0.0's first
+      # run), so confirm the version actually reached the registry.
+      - name: Confirm the version is on npm
+        run: |
+          version=$(node -p "require('./sdk/package.json').version")
+          for attempt in $(seq 1 12); do
+            if npm view "auctionflow-sdk@$version" version >/dev/null 2>&1; then
+              echo "auctionflow-sdk@$version is on npm"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::auctionflow-sdk@$version is not on npm after publishing"
+          exit 1
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
