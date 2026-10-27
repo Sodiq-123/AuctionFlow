@@ -1,6 +1,11 @@
-import { createConfig } from "ponder";
+import { createConfig, factory } from "ponder";
+import { getAbiItem } from "viem";
 
 import { TokenAuctionAbi } from "./abis/TokenAuction";
+import { AuctionTokenAbi, UniswapV3PoolAbi } from "./abis/children";
+
+const TOKEN_AUCTION = "0x990a04ffe0d49356321271629889fa0413ad1bdc";
+const START_BLOCK = 51087209;
 
 export default createConfig({
   chains: {
@@ -15,8 +20,30 @@ export default createConfig({
     TokenAuction: {
       chain: "baseSepolia",
       abi: TokenAuctionAbi.abi,
-      address: "0x990a04ffe0d49356321271629889fa0413ad1bdc",
-      startBlock: 51087209,
+      address: TOKEN_AUCTION,
+      startBlock: START_BLOCK,
+    },
+    // Every token a launch creates, found from AuctionCreated.
+    AuctionToken: {
+      chain: "baseSepolia",
+      abi: AuctionTokenAbi,
+      address: factory({
+        address: TOKEN_AUCTION,
+        event: getAbiItem({ abi: TokenAuctionAbi.abi, name: "AuctionCreated" }),
+        parameter: "token",
+      }),
+      startBlock: START_BLOCK,
+    },
+    // Every Uniswap pool a migration opens, found from AuctionMigrated.
+    UniswapPool: {
+      chain: "baseSepolia",
+      abi: UniswapV3PoolAbi,
+      address: factory({
+        address: TOKEN_AUCTION,
+        event: getAbiItem({ abi: TokenAuctionAbi.abi, name: "AuctionMigrated" }),
+        parameter: "pool",
+      }),
+      startBlock: START_BLOCK,
     },
   },
 });

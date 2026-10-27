@@ -287,6 +287,8 @@ The browser never talks to the indexer directly: the app's `/indexer/graphql` ro
 
 Ponder-based indexer that listens to on-chain events and exposes a **GraphQL API** over PostgreSQL.
 
+Besides the launchpad contract, it follows every token a launch creates (its `Transfer` events, for holders and portfolios) and every Uniswap pool a migration opens (its `Swap` events). Trades made anywhere after graduation, on Uniswap, an aggregator or a wallet's swap screen, land in the same trade feed, price chart and volume as trades on the curve.
+
 ### Run locally
 
 ```bash
@@ -322,11 +324,13 @@ query ActiveAuctions {
   }
 }
 
-# Live trade feed for a token: buys and sells on the curve, newest first
+# Live trade feed for a token, newest first: venue is CURVE before
+# graduation and UNISWAP after it
 query TradeFeed($id: String!) {
   trades(where: { auctionId: $id }, orderBy: "timestamp", orderDirection: "desc", limit: 20) {
     items {
       side
+      venue
       trader
       amount
       value
@@ -347,14 +351,48 @@ query AuctionPriceChart($id: String!) {
   }
 }
 
-# Protocol-wide metrics
+# Holders of a token, largest first (includes the Uniswap pool after migration)
+query Holders($id: String!) {
+  holdings(where: { auctionId: $id, balance_gt: "0" }, orderBy: "balance", orderDirection: "desc") {
+    items {
+      holder
+      balance
+    }
+  }
+}
+
+# Everything a wallet holds
+query Portfolio($wallet: String!) {
+  holdings(where: { holder: $wallet, balance_gt: "0" }) {
+    items {
+      auctionId
+      tokenAddress
+      balance
+    }
+  }
+}
+
+# Trending: volume per hour; sum the last 24 hours per auction
+query RecentVolume($since: BigInt!) {
+  volumeHours(where: { hour_gte: $since }) {
+    items {
+      auctionId
+      volume
+      trades
+    }
+  }
+}
+
+# Protocol metrics, one row per payment token (the row id is its address)
 query ProtocolStats {
   protocolMetricss {
     items {
+      id
       totalAuctions
       activeAuctions
       completedAuctions
       totalVolumeRaised
+      totalUniswapVolume
       totalFeesCollected
     }
   }

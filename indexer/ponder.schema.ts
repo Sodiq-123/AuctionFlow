@@ -1,4 +1,4 @@
-import { onchainTable } from "ponder";
+import { index, onchainTable } from "ponder";
 
 export const auction = onchainTable("auction", (t) => ({
   id: t.text().primaryKey(),
@@ -35,18 +35,76 @@ export const auction = onchainTable("auction", (t) => ({
   // Trading fees collected from the pool, in the payment token.
   lpFeesCreatorPayment: t.bigint().notNull().default(0n),
   lpFeesProtocolPayment: t.bigint().notNull().default(0n),
+  // Trading on the curve and, after migration, in the Uniswap pool: payment
+  // tokens exchanged before fees, the number of trades and the latest one.
+  volume: t.bigint().notNull().default(0n),
+  tradeCount: t.integer().notNull().default(0),
+  lastTradeAt: t.bigint(),
   transactionHash: t.hex().notNull(),
 }));
 
-// Every buy and sell on the curve: the live trade feed for a token.
+// Which auction a token or pool address belongs to: Transfer and Swap events
+// carry only the address that emitted them.
+export const tokenLookup = onchainTable("token_lookup", (t) => ({
+  id: t.hex().primaryKey(), // token address
+  auctionId: t.text().notNull(),
+}));
+
+export const poolLookup = onchainTable("pool_lookup", (t) => ({
+  id: t.hex().primaryKey(), // Uniswap pool address
+  auctionId: t.text().notNull(),
+  tokenIsToken0: t.boolean().notNull(),
+}));
+
+// Every holder's balance of every launched token, from its Transfer events.
+// Includes the auction contract and the Uniswap pool, which hold tokens
+// during and after migration.
+export const holding = onchainTable(
+  "holding",
+  (t) => ({
+    id: t.text().primaryKey(), // `${token}-${holder}`
+    auctionId: t.text().notNull(),
+    tokenAddress: t.hex().notNull(),
+    holder: t.hex().notNull(),
+    balance: t.bigint().notNull(),
+    updatedAt: t.bigint().notNull(),
+  }),
+  (table) => ({
+    auctionIdx: index().on(table.auctionId),
+    holderIdx: index().on(table.holder),
+  })
+);
+
+// Trading volume per auction per hour, for "trending": sum the last 24.
+export const volumeHour = onchainTable(
+  "volume_hour",
+  (t) => ({
+    id: t.text().primaryKey(), // `${auctionId}-${hour}`
+    auctionId: t.text().notNull(),
+    hour: t.bigint().notNull(), // unix time / 3600
+    volume: t.bigint().notNull(),
+    trades: t.integer().notNull(),
+  }),
+  (table) => ({
+    hourIdx: index().on(table.hour),
+  })
+);
+
+// Every buy and sell, on the curve and then in the Uniswap pool: the live
+// trade feed for a token.
 export const trade = onchainTable("trade", (t) => ({
   id: t.text().primaryKey(),
   auctionId: t.text().notNull(),
+  // The account that sent the transaction. For a Uniswap trade made through
+  // a router or aggregator, that's the user, not the contract that swapped.
   trader: t.hex().notNull(),
   side: t.text().notNull(), // "BUY" | "SELL"
+  venue: t.text().notNull().default("CURVE"), // "CURVE" | "UNISWAP"
   amount: t.bigint().notNull(),
   // Payment tokens exchanged before the fee: the cost of a buy, the proceeds of a sell.
   value: t.bigint().notNull(),
+  // The protocol's fee on a curve trade; zero for Uniswap, whose 1% pool fee
+  // is shared when collected (LpFeesCollected).
   protocolFee: t.bigint().notNull(),
   pricePerToken: t.bigint().notNull(),
   timestamp: t.bigint().notNull(),
@@ -79,6 +137,8 @@ export const priceSnapshot = onchainTable("price_snapshot", (t) => ({
   blockNumber: t.bigint().notNull(),
 }));
 
+// Totals per payment token (the row's id is its address): amounts in USDC
+// and in ETH can't be added together.
 export const protocolMetrics = onchainTable("protocol_metrics", (t) => ({
   id: t.text().primaryKey(),
   totalAuctions: t.integer().notNull(),
@@ -90,4 +150,6 @@ export const protocolMetrics = onchainTable("protocol_metrics", (t) => ({
   totalLpFeesCollected: t.bigint().notNull().default(0n),
   // Payment tokens paid out to sellers on the curve, before fees.
   totalSellVolume: t.bigint().notNull().default(0n),
+  // Payment tokens traded in migrated tokens' Uniswap pools.
+  totalUniswapVolume: t.bigint().notNull().default(0n),
 }));
