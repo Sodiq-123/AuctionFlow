@@ -1,5 +1,40 @@
 # auctionflow-sdk
 
+## 3.0.0
+
+### Major Changes
+
+- 70277a4: Pay in ETH, for the contract that adds ETH-priced launches.
+
+  - **Breaking:** `launch(name, symbol, metadataURI?, paymentToken?)` takes the
+    payment token, defaulting to WETH, since the contract now keeps one launch
+    preset per payment token. Pass `USDC_ADDRESSES[chainId]` to launch in USDC.
+  - `buyTokensWithETH` and `sellTokensForETH` trade a WETH-priced token in plain
+    ETH, in one transaction and with no approval. Unused ETH is refunded.
+  - `getLaunchPreset(paymentToken)`, `isPricedInETH(auctionId)` and
+    `WETH_ADDRESSES`.
+  - `tokenAuctionAbi` covers the new contract, whose constructor takes the WETH
+    address.
+
+### Minor Changes
+
+- 0ec84a2: `tokenAuctionAbi` is exported, for decoding the contract's events (for
+  example the auction id in a launch's `AuctionCreated` log) and for calls the
+  SDK doesn't wrap.
+
+### Patch Changes
+
+- 0ec84a2: `fillPurchase` (and so `getQuote`) matches the contract when only dust is left
+  to raise: it reports a purchase of nothing that graduates the auction, rather
+  than throwing "sold out".
+- 0ec84a2: Fix `getAuction`, and with it `getQuote` and `getSellQuote`: they read the
+  contract's `auctions` getter as named fields, but viem returns a getter with
+  several return values as an array, so every call threw "Cannot read
+  properties of undefined". They now decode it correctly.
+- c3f839a: Base Sepolia now points at `0x990a04FFE0D49356321271629889fA0413AD1BDC`, the
+  deployment that adds paying in ETH, with presets for 10 USDC and 0.01 ETH
+  launches.
+
 ## 2.1.0
 
 ### Minor Changes
