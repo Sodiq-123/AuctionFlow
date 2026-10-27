@@ -30,13 +30,13 @@ An open-source token launchpad for EVM chains: launch a token in one call, trade
                Base + Base Sepolia
 ```
 
-**Deployed contract (Base Sepolia):** [`0xE57fE62e31666A9B749E89086A8a5487A530153b`](https://sepolia.basescan.org/address/0xE57fE62e31666A9B749E89086A8a5487A530153b), owned by a [Safe multisig](https://sepolia.basescan.org/address/0xAF5720976293406F94905cc5E60CA8c431eff2D3)
+**Deployed contract (Base Sepolia):** [`0x990a04FFE0D49356321271629889fA0413AD1BDC`](https://sepolia.basescan.org/address/0x990a04FFE0D49356321271629889fA0413AD1BDC), owned by a [Safe multisig](https://sepolia.basescan.org/address/0xAF5720976293406F94905cc5E60CA8c431eff2D3)
 
 ---
 
 ## Live on Base Sepolia
 
-One complete launch, from a one-click `launch` to a trading Uniswap market, with the standard launch preset, picked up by the indexer. It ran on the previous deployment, [`0x24a702F1…`](https://sepolia.basescan.org/address/0x24a702F10f17A522B9B5511EC2970EE029195Ee4), before payouts became claims; the current contract went through the same lifecycle, plus claims and the handover to the Safe, in a fork rehearsal. The preset: 1 billion tokens priced in USDC, starting at 0.000000002 USDC each, graduating at 10 USDC raised with 80% of the raise going to the pool, a 1% protocol fee on curve trades, and 20% of pool trading fees to the protocol.
+One complete launch, from a one-click `launch` to a trading Uniswap market, with the standard launch preset, picked up by the indexer. It ran on the previous deployment, [`0x24a702F1…`](https://sepolia.basescan.org/address/0x24a702F10f17A522B9B5511EC2970EE029195Ee4), before payouts became claims; the current contract (which adds paying in ETH) went through the same lifecycle with an ETH-priced launch, plus claims and the handover to the Safe, in a fork rehearsal. The preset: 1 billion tokens priced in USDC, starting at 0.000000002 USDC each, graduating at 10 USDC raised with 80% of the raise going to the pool, a 1% protocol fee on curve trades, and 20% of pool trading fees to the protocol.
 
 | Step | What happened | Transaction |
 | --- | --- | --- |
