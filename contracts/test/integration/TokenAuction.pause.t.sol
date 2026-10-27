@@ -57,7 +57,7 @@ contract TokenAuctionPauseTest is Test {
         usdc = new MockUSDC();
         auction = new TokenAuction(
             makeAddr("feeRecipient"), 250, INonfungiblePositionManager(address(new NoPoolPositionManager()))
-        );
+        , IWETH9(address(0)));
         auction.setPaymentTokenAllowed(address(usdc), true);
         auction.setLaunchPreset(
             TokenAuction.LaunchPreset({
@@ -76,7 +76,7 @@ contract TokenAuctionPauseTest is Test {
 
     function _launch() internal returns (uint256 id) {
         vm.prank(creator);
-        id = auction.launch("TestToken", "TT", "");
+        id = auction.launch("TestToken", "TT", "", address(usdc));
     }
 
     function _buy(uint256 id, uint256 amount) internal {
@@ -104,7 +104,7 @@ contract TokenAuctionPauseTest is Test {
         auction.pause();
         vm.prank(creator);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        auction.launch("TestToken", "TT", "");
+        auction.launch("TestToken", "TT", "", address(usdc));
     }
 
     function test_pause_blocksCreateAuction() public {

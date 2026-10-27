@@ -136,7 +136,7 @@ contract TokenAuctionInvariantTest is Test {
 
     function setUp() public {
         usdc = new MockUSDC();
-        auction = new TokenAuction(feeRecipient, 250, INonfungiblePositionManager(makeAddr("positionManager")));
+        auction = new TokenAuction(feeRecipient, 250, INonfungiblePositionManager(makeAddr("positionManager")), IWETH9(address(0)));
         auction.setPaymentTokenAllowed(address(usdc), true);
 
         vm.prank(creator);

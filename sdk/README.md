@@ -17,7 +17,7 @@ pnpm add auctionflow-sdk viem
 ## Quick start
 
 ```typescript
-import { AuctionFlowSDK, parseCurvePrice } from "auctionflow-sdk";
+import { AuctionFlowSDK, parseCurvePrice, USDC_ADDRESSES } from "auctionflow-sdk";
 import { createWalletClient, http, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
@@ -66,12 +66,15 @@ Without it, constructing on a chain that has no built-in deployment throws.
 ## Launch a token (one click)
 
 ```typescript
-const hash = await sdk.launch("My Token", "MTK", "ipfs://<metadata-json>");
+const hash = await sdk.launch("My Token", "MTK", "ipfs://<metadata-json>");                 // priced in ETH
+const usdc = await sdk.launch("My Token", "MTK", "ipfs://<metadata-json>", USDC_ADDRESSES[84532]); // priced in USDC
 ```
 
-Everything except the name, symbol and metadata (such as the token image) comes
-from the protocol's standard launch preset: the payment token, supply, curve,
-graduation threshold and liquidity share.
+The creator picks the name, symbol, metadata (such as the token image) and the
+payment token: WETH by default, so the token trades in plain ETH, or USDC.
+Everything else comes from the protocol's standard launch preset for that
+token: supply, curve, graduation threshold and liquidity share. Read it with
+`getLaunchPreset(paymentToken)`, which returns `null` for a token with no preset.
 
 ## Create an auction with custom parameters
 
@@ -152,6 +155,24 @@ Like `buyTokens`, the contract reverts if the price moved past your bound before
 the transaction landed. Purchases round up and sales round down, so a round
 trip can never profit, and the contract always holds enough to buy back every
 outstanding token.
+
+## Pay in ETH
+
+A token priced in WETH can be bought and sold with plain ETH, in one
+transaction and with no token approval. The contract wraps and unwraps it.
+
+```typescript
+if (await sdk.isPricedInETH(0n)) {
+  await sdk.buyTokensWithETH(0n, parseUnits("1000000", 18));   // sends the quote plus 1% as ETH
+  await sdk.sellTokensForETH(0n, parseUnits("400000", 18));    // paid out in ETH
+}
+```
+
+`buyTokensWithETH` sends the most the purchase may cost as the transaction's
+value (the same `maxCost` / `slippageBps` options as `buyTokens`), and the
+contract refunds whatever the purchase doesn't use. `sellTokensForETH` takes
+the same options as `sellTokens`. A creator's proceeds, pool fees and claims
+for such a token are paid in WETH.
 
 ## Read state & quotes
 
@@ -237,10 +258,14 @@ Early buyers pay less; later buyers pay more.
 | Member | Description |
 | --- | --- |
 | `new AuctionFlowSDK({ chainId, rpcUrl, walletClient?, auctionAddress? })` | Construct against a supported chain. `auctionAddress` overrides the built-in deployment; without it, a chain with no canonical deployment throws. |
-| `launch(name, symbol, metadataURI?)` | One-click launch with the protocol's standard preset. Requires a wallet client. |
+| `launch(name, symbol, metadataURI?, paymentToken?)` | One-click launch with the protocol's standard preset for `paymentToken` (default WETH). Requires a wallet client. |
+| `getLaunchPreset(paymentToken)` | The standard launch for `paymentToken`, or `null` if none is configured. |
 | `buildAuction()` | Returns an `AuctionBuilder` (fluent config builder). |
 | `createAuction(config)` | Launch with custom parameters. Requires a wallet client. |
 | `buyTokens(auctionId, amount, { maxCost?, slippageBps? })` | Send the `buyTokens` transaction with a maximum total cost; reverts if the price moved past it. Defaults to the quote plus 1%. Requires a wallet client. |
+| `buyTokensWithETH(auctionId, amount, { maxCost?, slippageBps? })` | `buyTokens` for a WETH-priced token, paid in plain ETH; the unused part of the value is refunded. Requires a wallet client. |
+| `sellTokensForETH(auctionId, amount, { minProceeds?, slippageBps? })` | `sellTokens` for a WETH-priced token, paid out in plain ETH. Requires a wallet client. |
+| `isPricedInETH(auctionId)` | Whether the auction is priced in WETH, so it trades in plain ETH. |
 | `getAuction(auctionId)` | Read the full auction struct. |
 | `getSpotPrice(auctionId)` | Read the current on-chain spot price. |
 | `getQuote(auctionId, amount)` | Tokens actually filled, cost, fee, post-trade spot price, and whether the purchase completes the auction. |
@@ -256,9 +281,9 @@ Early buyers pay less; later buyers pay more.
 | `getClaimable(token, account)` | How much of `token` is credited to `account`. |
 | `claimProtocolFees(token)` | Send the protocol's unclaimed fees in `token` to the fee recipient. Anyone may call. |
 | `getProtocolFees(token)` | The protocol's unclaimed fees in `token`. |
-| `isPaymentTokenAllowed(token)` | Whether new auctions may be priced in `token`. Only owner-approved tokens (USDC) can be used. |
+| `isPaymentTokenAllowed(token)` | Whether new auctions may be priced in `token`. Only owner-approved tokens (USDC and WETH) can be used. |
 | `hasWithdrawnProceeds(auctionId)` | Whether the creator has already claimed the proceeds. |
-| `isPaused()` | Whether the protocol is paused. While paused, `launch`, `createAuction` and `buyTokens` revert; selling back, migration, withdrawals, fee collection and claims still work. |
+| `isPaused()` | Whether the protocol is paused. While paused, `launch`, `createAuction`, `buyTokens` and `buyTokensWithETH` revert; selling back, migration, withdrawals, fee collection and claims still work. |
 
 ## License
 

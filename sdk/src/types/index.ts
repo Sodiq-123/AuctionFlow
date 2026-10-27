@@ -51,6 +51,17 @@ export interface SellQuote {
   spotPriceAfter: bigint;
 }
 
+/** The protocol's standard launch for one payment token, as `launch` uses it. */
+export interface LaunchPreset {
+  paymentToken: Address;
+  maxSupply: bigint;
+  basePrice: bigint;
+  slope: bigint;
+  /** Graduation threshold, in payment-token units. */
+  maxRaise: bigint;
+  liquidityBps: bigint;
+}
+
 export interface MigrationInfo {
   /** The Uniswap v3 pool, or null if the auction unlocked without one. */
   pool: Address | null;

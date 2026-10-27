@@ -18,7 +18,7 @@ contract TokenAuctionCreateTest is Test {
 
     function setUp() public {
         usdc = new MockUSDC();
-        auction = new TokenAuction(feeRecipient, 250, INonfungiblePositionManager(makeAddr("positionManager")));
+        auction = new TokenAuction(feeRecipient, 250, INonfungiblePositionManager(makeAddr("positionManager")), IWETH9(address(0)));
         auction.setPaymentTokenAllowed(address(usdc), true);
         usdc.transfer(creator, 10_000 * 1e6);
     }
@@ -102,14 +102,14 @@ contract TokenAuctionCreateTest is Test {
     function test_launch_revertsWithoutPreset() public {
         vm.prank(creator);
         vm.expectRevert("No launch preset");
-        auction.launch("Meme", "MEME", "ipfs://meme");
+        auction.launch("Meme", "MEME", "ipfs://meme", address(usdc));
     }
 
     function test_launch_usesPresetAndCreatorDetails() public {
         auction.setLaunchPreset(_preset());
 
         vm.prank(creator);
-        uint256 id = auction.launch("Meme", "MEME", "ipfs://meme");
+        uint256 id = auction.launch("Meme", "MEME", "ipfs://meme", address(usdc));
 
         (TokenAuction.AuctionConfig memory cfg, TokenAuction.AuctionState state,,) = auction.auctions(id);
         assertEq(cfg.creator, creator, "launcher is the creator");

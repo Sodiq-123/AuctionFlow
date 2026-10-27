@@ -4,8 +4,8 @@ This document covers the contracts in `src/`: `TokenAuction` (the launchpad), `A
 
 ## How it works
 
-1. A creator calls `launch` (standard preset) or `createAuction` (custom curve). The contract deploys an `AuctionToken` it owns, and trading opens at once.
-2. Buyers buy from a linear bonding curve and can sell back to it. Tokens cannot be transferred until migration.
+1. A creator calls `launch` (the standard preset for the chosen payment token, USDC or WETH) or `createAuction` (custom curve). The contract deploys an `AuctionToken` it owns, and trading opens at once.
+2. Buyers buy from a linear bonding curve and can sell back to it. Auctions priced in WETH can also be bought and sold with plain ETH (`buyTokensWithETH`, `sellTokensForETH`), which the contract wraps and unwraps in the same call. Tokens cannot be transferred until migration.
 3. When the raise reaches `maxRaise`, the auction graduates (`COMPLETED`) and the curve closes.
 4. Anyone calls `migrate`. It opens a 1% Uniswap v3 pool at the curve's final price, adds full-range liquidity from the reserved share of the raise plus newly minted tokens, keeps the position NFT forever, unlocks transfers and renounces the token's ownership.
 5. The creator withdraws their share of the raise. Anyone can call `collectFees` to move pool fees into the contract, where the creator and the protocol claim their shares.
@@ -14,7 +14,7 @@ This document covers the contracts in `src/`: `TokenAuction` (the launchpad), `A
 
 | Asset | Where it sits |
 | --- | --- |
-| Buyers' payment tokens (USDC) | In `TokenAuction` while an auction trades, owed back to holders who sell |
+| Buyers' payment tokens (USDC or WETH) | In `TokenAuction` while an auction trades, owed back to holders who sell. ETH is always held wrapped; the contract keeps no ETH between calls |
 | Creators' proceeds | In `TokenAuction` from graduation until `withdrawProceeds` |
 | Pool liquidity | A Uniswap v3 position NFT held by `TokenAuction`, permanently |
 | Unclaimed payouts and protocol fees | In `TokenAuction`, tracked by `claimable` and `protocolFees` |
@@ -31,6 +31,7 @@ This document covers the contracts in `src/`: `TokenAuction` (the launchpad), `A
 | Owner (a Safe multisig before mainnet) | Fee levels within caps, the launch preset, the payment-token allowlist, pausing entries, sweeping excess | Users' funds: see "What the owner cannot do" |
 | Uniswap v3 (position manager, factory, pools) | Correct pool behaviour; the position manager address is immutable | Pool state. Anyone can create or initialise the pool first, so migration checks and corrects its price |
 | Payment token (USDC) | Standard ERC-20 behaviour, enforced by the owner's allowlist | Circle can blacklist addresses and pause USDC itself (see "Accepted risks") |
+| WETH (Base predeploy `0x4200…0006`, immutable) | 1:1 wrapping and unwrapping | Nothing else: it has no admin, blacklist or pause |
 
 ## What the owner can and cannot do
 
@@ -39,9 +40,9 @@ The owner can:
 - set the protocol fee for **new** auctions, capped at 10% (`MAX_FEE_BPS`);
 - set the protocol's share of pool fees for **new** auctions, capped at 50% (`MAX_LP_FEE_SHARE_BPS`);
 - change the fee recipient. Unclaimed protocol fees go to the new recipient;
-- set the one-click launch preset, validated exactly like a custom launch;
+- set the one-click launch preset for each payment token, validated exactly like a custom launch;
 - allow or disallow payment tokens for **new** auctions;
-- pause and unpause `launch`, `createAuction` and `buyTokens`;
+- pause and unpause `launch`, `createAuction`, `buyTokens` and `buyTokensWithETH`;
 - sweep tokens held **above** `custodied`, such as tokens sent to the contract by mistake;
 - transfer ownership, in two steps (`Ownable2Step`).
 
@@ -49,10 +50,10 @@ The owner cannot:
 
 - change any term of an existing auction. Fee, pool-fee share, curve, threshold and liquidity share are fixed when the auction is created;
 - move funds owed to anyone. `sweep` is limited to the excess over `custodied`;
-- block a way out. Pausing never stops `sellTokens`, `migrate`, `withdrawProceeds`, `collectFees`, `claim` or `claimProtocolFees`;
+- block a way out. Pausing never stops `sellTokens`, `sellTokensForETH`, `migrate`, `withdrawProceeds`, `collectFees`, `claim` or `claimProtocolFees`;
 - move or withdraw pool liquidity. No function transfers a position NFT or decreases its liquidity;
 - mint tokens. Only `TokenAuction` can mint, only within an auction's `maxSupply`, and token ownership is renounced at migration;
-- change the Uniswap position manager, which is immutable.
+- change the Uniswap position manager or the WETH address, which are immutable.
 
 ## Invariants
 
@@ -67,6 +68,7 @@ Each is checked by the stateful fuzzing suite (`test/invariant/TokenAuction.inva
 7. Every fee a trader pays is either still accrued or was paid to the fee recipient.
 8. The raise always covers selling every outstanding token back to the curve at once.
 9. A buy followed by a sell never makes a profit (`test/unit/BondingCurve.t.sol`, fuzzed).
+10. The contract holds no ETH between calls; ETH-priced auctions keep invariants 4 to 8 whether traders use ETH or WETH (`test/invariant/TokenAuction.eth.invariant.t.sol`).
 
 ## Threats and mitigations
 
@@ -86,6 +88,7 @@ Each is checked by the stateful fuzzing suite (`test/invariant/TokenAuction.inva
 | 12 | **Liquidity rug**: pulling the pool's liquidity after migration. | The position NFT stays in `TokenAuction`, and no function can transfer it or decrease its liquidity. | `test_migrate_opensPoolAtAuctionPriceAndLocksLiquidity` (fork) |
 | 13 | **Minting after migration.** | `AuctionToken` ownership is renounced at the end of `migrate`, so its supply is fixed for good. `burnFrom` also refuses once transfers are enabled. | `test_noMintOrBurnAfterMigration` |
 | 14 | **Owner key compromise or mistakes.** | Every owner power is capped or limited to new auctions, as listed above. Ownership transfers need the new owner to accept, so a mistyped address cannot take the contract. Before mainnet, ownership moves to a Safe multisig. | `test/integration/TokenAuction.admin.t.sol`, `…pause.t.sol` |
+| 15 | **ETH left behind or refunds lost.** A buyer sends more ETH than the purchase costs, or sends ETH to the contract directly. | `buyTokensWithETH` treats the ETH sent as `maxCost`, wraps exactly the cost plus fee and refunds the rest in the same call. If the refund can't be delivered the whole buy reverts, so nothing is kept. `receive` accepts ETH only from WETH (the unwrap in `sellTokensForETH`, forwarded at once), so direct transfers are refused. The ETH entry points require the auction to be priced in WETH, and are disabled when WETH is unset. | `test/integration/TokenAuction.eth.t.sol`, `test_ethLaunch_fullLifecycle` (fork, real WETH and Uniswap) |
 
 ## Accepted risks
 
@@ -104,6 +107,7 @@ Slither 0.11.6 and Aderyn 0.6.8 were run on `src/`. Neither reports a finding th
 - **Reentrancy** (Slither `reentrancy-no-eth` and `reentrancy-benign`; Aderyn H-1): state written after external calls in `migrate` and `collectFees`. Every function that reads or writes that state is `nonReentrant`, and the calls go to the auction's own token, the immutable position manager, its pools and an allowlisted payment token. The reserve left over at migration can only be credited after the Uniswap calls, since its size is only known afterwards.
 - **Strict equalities**: deliberate. One is the exact balance check that rejects fee-on-transfer tokens; the others are exact pool-price checks.
 - **Ignored return values**: deliberate (`slot0` fields, the swap's amounts, the minted liquidity).
+- **Low-level call** (Slither `low-level-calls`): `_sendETH` sends refunds and sell proceeds with `call`, the only way to send ETH without a gas limit. Its result is checked, and every caller is `nonReentrant`.
 - **Centralization**: covered by "What the owner can and cannot do", and by the Safe multisig.
 - **Floating pragma, PUSH0**: Foundry pins solc 0.8.24, and Base supports PUSH0.
 

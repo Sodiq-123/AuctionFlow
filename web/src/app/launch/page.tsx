@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { erc20Abi, parseEventLogs } from "viem";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
 import { tokenAuctionAbi } from "auctionflow-sdk";
-import { auctionAddress, chain } from "@/lib/config";
+import { auctionAddress, chain, usdcAddress } from "@/lib/config";
 import { readSdk, writeSdk } from "@/lib/sdk";
 import { useTx } from "@/lib/tx";
 import { formatToken } from "@/lib/format";
@@ -29,14 +29,13 @@ export default function LaunchPage() {
     queryKey: ["launch-terms"],
     enabled: !!publicClient,
     queryFn: async () => {
-      const read = <T,>(functionName: "launchPreset" | "defaultFeeBps") =>
-        publicClient!.readContract({ address: auctionAddress, abi: tokenAuctionAbi, functionName }) as Promise<T>;
       const [preset, feeBps, paused] = await Promise.all([
-        read<readonly [`0x${string}`, bigint, bigint, bigint, bigint, bigint]>("launchPreset"),
-        read<bigint>("defaultFeeBps"),
+        readSdk.getLaunchPreset(usdcAddress),
+        publicClient!.readContract({ address: auctionAddress, abi: tokenAuctionAbi, functionName: "defaultFeeBps" }),
         readSdk.isPaused(),
       ]);
-      const [paymentToken, maxSupply, , , maxRaise, liquidityBps] = preset;
+      if (!preset) throw new Error("No USDC launch preset is configured");
+      const { paymentToken, maxSupply, maxRaise, liquidityBps } = preset;
       const [decimals, symbol] = await Promise.all([
         publicClient!.readContract({ address: paymentToken, abi: erc20Abi, functionName: "decimals" }),
         publicClient!.readContract({ address: paymentToken, abi: erc20Abi, functionName: "symbol" }),
@@ -77,7 +76,7 @@ export default function LaunchPage() {
       uri = json.uri;
     }
 
-    const receipt = await run([{ label: "Launch", send: () => writeSdk(walletClient).launch(name, symbol, uri) }]);
+    const receipt = await run([{ label: "Launch", send: () => writeSdk(walletClient).launch(name, symbol, uri, usdcAddress) }]);
     if (!receipt) return;
     const [created] = parseEventLogs({ abi: tokenAuctionAbi, eventName: "AuctionCreated", logs: receipt.logs });
     router.push(created ? `/token/${created.args.auctionId}` : "/");

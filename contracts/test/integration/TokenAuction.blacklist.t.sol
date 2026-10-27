@@ -72,7 +72,7 @@ contract TokenAuctionBlacklistTest is Test {
         usdc = new BlacklistableUSDC();
         auction = new TokenAuction(
             feeRecipient, 100, INonfungiblePositionManager(address(new RejectingPositionManager()))
-        );
+        , IWETH9(address(0)));
         auction.setPaymentTokenAllowed(address(usdc), true);
         auction.setLaunchPreset(
             TokenAuction.LaunchPreset({
@@ -91,7 +91,7 @@ contract TokenAuctionBlacklistTest is Test {
 
     function _launch() internal returns (uint256 id) {
         vm.prank(creator);
-        id = auction.launch("TestToken", "TT", "");
+        id = auction.launch("TestToken", "TT", "", address(usdc));
     }
 
     function test_blacklistedFeeRecipient_cannotBlockSells() public {

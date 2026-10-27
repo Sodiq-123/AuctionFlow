@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./interfaces/IUniswapV3.sol";
+import "./interfaces/IWETH9.sol";
 
 contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3SwapCallback {
     using SafeERC20 for IERC20;
@@ -137,9 +138,14 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     ///      callback can be authenticated.
     address private _activePool;
 
-    /// @notice Parameters for one-click launches. Unset (zero payment token)
-    ///         until the owner configures it.
-    LaunchPreset public launchPreset;
+    /// @notice Parameters for one-click launches, per payment token. A token's
+    ///         preset is unset (zero payment token) until the owner configures it.
+    mapping(address => LaunchPreset) public launchPresets;
+
+    /// @notice Wrapped ether. Auctions priced in it can also be bought and
+    ///         sold with plain ETH, which is wrapped and unwrapped here. Zero
+    ///         disables the ETH entry points.
+    IWETH9 public immutable weth;
 
     // Events — these are what the indexer will listen to
     event AuctionCreated(
@@ -201,12 +207,16 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         address paymentToken, uint256 maxSupply, uint256 basePrice, uint256 slope, uint256 maxRaise, uint256 liquidityBps
     );
 
-    constructor(address feeRecipient_, uint256 defaultFeeBps_, INonfungiblePositionManager positionManager_)
-        Ownable(msg.sender)
-    {
+    constructor(
+        address feeRecipient_,
+        uint256 defaultFeeBps_,
+        INonfungiblePositionManager positionManager_,
+        IWETH9 weth_
+    ) Ownable(msg.sender) {
         require(feeRecipient_ != address(0), "Zero fee recipient");
         require(address(positionManager_) != address(0), "Zero position manager");
         positionManager = positionManager_;
+        weth = weth_;
         require(defaultFeeBps_ <= MAX_FEE_BPS, "Fee too high");
         protocolFeeRecipient = feeRecipient_;
         defaultFeeBps = defaultFeeBps_;
@@ -219,14 +229,16 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         return _createAuction(p);
     }
 
-    /// @notice One-click launch: name, symbol and metadata from the creator,
-    ///         everything else from the protocol's standard preset.
-    function launch(string calldata name, string calldata symbol, string calldata metadataURI)
-        external
-        whenNotPaused
-        returns (uint256 auctionId)
-    {
-        LaunchPreset memory s = launchPreset;
+    /// @notice One-click launch: name, symbol, metadata and the payment token
+    ///         from the creator, everything else from the protocol's standard
+    ///         preset for that token.
+    function launch(
+        string calldata name,
+        string calldata symbol,
+        string calldata metadataURI,
+        address paymentToken
+    ) external whenNotPaused returns (uint256 auctionId) {
+        LaunchPreset memory s = launchPresets[paymentToken];
         require(s.paymentToken != address(0), "No launch preset");
         return _createAuction(
             AuctionParams({
@@ -317,27 +329,45 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     ///        receive less than `amount`; `TokensPurchased` reports the actual
     ///        amount.
     function buyTokens(uint256 auctionId, uint256 amount, uint256 maxCost) external nonReentrant whenNotPaused {
+        _buy(auctionId, amount, maxCost, false);
+    }
+
+    /// @notice `buyTokens` for an auction priced in WETH, paid in plain ETH.
+    ///         The ETH sent is the most the buyer will pay (`maxCost`); what
+    ///         the purchase doesn't use is refunded.
+    function buyTokensWithETH(uint256 auctionId, uint256 amount) external payable nonReentrant whenNotPaused {
+        _buy(auctionId, amount, msg.value, true);
+    }
+
+    function _buy(uint256 auctionId, uint256 amount, uint256 maxCost, bool withETH) internal {
         AuctionData storage auction = auctions[auctionId];
         require(auction.state == AuctionState.ACTIVE, "Auction not active");
         require(amount > 0, "Zero amount");
+        require(!withETH || address(auction.config.paymentToken) == address(weth), "Not priced in ETH");
 
         uint256 cost;
         bool filledUp;
         (amount, cost, filledUp) = _fill(auction, amount);
         uint256 protocolFee = (cost * auction.config.protocolFeeBps) / 10000;
-        require(cost + protocolFee <= maxCost, "Slippage exceeded");
+        uint256 total = cost + protocolFee;
+        require(total <= maxCost, "Slippage exceeded");
 
         // Effects before interactions.
         auction.totalRaised += cost;
         auction.totalSold += amount;
         userPurchases[auctionId][msg.sender] += amount;
-        custodied[address(auction.config.paymentToken)] += cost + protocolFee;
+        custodied[address(auction.config.paymentToken)] += total;
         protocolFees[address(auction.config.paymentToken)] += protocolFee;
         if (filledUp) {
             auction.state = AuctionState.COMPLETED;
         }
 
-        _collectPayment(auction.config.paymentToken, cost + protocolFee);
+        if (withETH) {
+            weth.deposit{value: total}();
+            _sendETH(msg.sender, maxCost - total);
+        } else {
+            _collectPayment(auction.config.paymentToken, total);
+        }
         auction.config.token.mint(msg.sender, amount);
 
         emit TokensPurchased(
@@ -401,6 +431,24 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     ///        `maxCost` on purchases, it protects against the price moving
     ///        between quote and transaction.
     function sellTokens(uint256 auctionId, uint256 amount, uint256 minProceeds) external nonReentrant {
+        (IERC20 payment, uint256 net) = _sell(auctionId, amount, minProceeds);
+        payment.safeTransfer(msg.sender, net);
+    }
+
+    /// @notice `sellTokens` for an auction priced in WETH, paid out in plain ETH.
+    function sellTokensForETH(uint256 auctionId, uint256 amount, uint256 minProceeds) external nonReentrant {
+        (IERC20 payment, uint256 net) = _sell(auctionId, amount, minProceeds);
+        require(address(payment) == address(weth), "Not priced in ETH");
+        weth.withdraw(net);
+        _sendETH(msg.sender, net);
+    }
+
+    /// @dev Everything in a sell except paying the seller, which the caller
+    ///      does with the returned payment token and amount.
+    function _sell(uint256 auctionId, uint256 amount, uint256 minProceeds)
+        internal
+        returns (IERC20 payment, uint256 net)
+    {
         AuctionData storage auction = auctions[auctionId];
         require(auction.state == AuctionState.ACTIVE, "Auction not active");
         require(amount > 0, "Zero amount");
@@ -412,18 +460,18 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
             auction.totalSold, amount, auction.config.basePrice, auction.config.slope
         );
         uint256 protocolFee = (proceeds * auction.config.protocolFeeBps) / 10000;
-        require(proceeds - protocolFee >= minProceeds, "Slippage exceeded");
+        net = proceeds - protocolFee;
+        require(net >= minProceeds, "Slippage exceeded");
 
         // Effects before interactions.
-        IERC20 payment = auction.config.paymentToken;
+        payment = auction.config.paymentToken;
         auction.totalRaised -= proceeds;
         auction.totalSold -= amount;
         userPurchases[auctionId][msg.sender] -= amount;
-        custodied[address(payment)] -= proceeds - protocolFee;
+        custodied[address(payment)] -= net;
         protocolFees[address(payment)] += protocolFee;
 
         auction.config.token.burnFrom(msg.sender, amount);
-        payment.safeTransfer(msg.sender, proceeds - protocolFee);
 
         emit TokensSold(
             auctionId, msg.sender, amount, proceeds, protocolFee,
@@ -668,6 +716,19 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         emit ProtocolFeesClaimed(address(token), protocolFeeRecipient, amount);
     }
 
+    function _sendETH(address to, uint256 amount) internal {
+        if (amount == 0) return;
+        (bool ok,) = to.call{value: amount}("");
+        require(ok, "ETH transfer failed");
+    }
+
+    /// @dev ETH arrives only from unwrapping WETH for a sell. Buyers pass ETH
+    ///      as call value to `buyTokensWithETH`; anything sent here directly
+    ///      would be unrecoverable, so it is refused.
+    receive() external payable {
+        require(msg.sender == address(weth), "Use buyTokensWithETH");
+    }
+
     function _liquidityShare(AuctionData storage auction) internal view returns (uint256) {
         return (auction.totalRaised * auction.config.liquidityBps) / 10000;
     }
@@ -725,13 +786,14 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         defaultLpFeeShareBps = shareBps;
     }
 
-    /// @notice Set the parameters `launch` uses. Applies to launches from now
-    ///         on; existing auctions are unaffected.
+    /// @notice Set the parameters `launch` uses for `preset.paymentToken`.
+    ///         Applies to launches from now on; existing auctions are
+    ///         unaffected. Disallowing the token stops its launches.
     function setLaunchPreset(LaunchPreset calldata preset) external onlyOwner {
         require(preset.paymentToken != address(0), "Zero payment token");
         require(paymentTokenAllowed[preset.paymentToken], "Payment token not allowed");
         _validateCurve(preset.maxSupply, preset.basePrice, preset.slope, preset.maxRaise, preset.liquidityBps);
-        launchPreset = preset;
+        launchPresets[preset.paymentToken] = preset;
         emit LaunchPresetUpdated(
             preset.paymentToken, preset.maxSupply, preset.basePrice, preset.slope, preset.maxRaise, preset.liquidityBps
         );

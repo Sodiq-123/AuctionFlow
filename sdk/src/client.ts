@@ -11,8 +11,8 @@ import {
   WriteContractParameters,
 } from "viem";
 import { AuctionBuilder } from "./builders/auction-builder";
-import { AuctionConfig, AuctionData, BuyQuote, MigrationInfo, SellQuote, SupportedChainId } from "./types";
-import { AUCTION_ADDRESSES } from "./constants/addresses";
+import { AuctionConfig, AuctionData, BuyQuote, LaunchPreset, MigrationInfo, SellQuote, SupportedChainId } from "./types";
+import { AUCTION_ADDRESSES, WETH_ADDRESSES } from "./constants/addresses";
 import { DEFAULT_LIQUIDITY_BPS } from "./constants/protocol";
 import { tokenAuctionAbi } from "./abis/token-auction";
 import {
@@ -102,9 +102,15 @@ export class AuctionFlowSDK {
 
   /**
    * One-click launch: a token with the protocol's standard curve, threshold
-   * and liquidity share. Trading starts immediately.
+   * and liquidity share for `paymentToken`. Trading starts immediately.
+   * Defaults to WETH, so the token trades in plain ETH (see `buyTokensWithETH`).
    */
-  async launch(name: string, symbol: string, metadataURI = ""): Promise<Hash> {
+  async launch(
+    name: string,
+    symbol: string,
+    metadataURI = "",
+    paymentToken: Address = WETH_ADDRESSES[this.chainId]
+  ): Promise<Hash> {
     if (!this.walletClient) throw new Error("Wallet client required");
     return this.walletClient.writeContract({
       chain: this.chain,
@@ -112,8 +118,20 @@ export class AuctionFlowSDK {
       address: this.auctionAddress,
       abi: tokenAuctionAbi,
       functionName: "launch",
-      args: [name, symbol, metadataURI],
+      args: [name, symbol, metadataURI, paymentToken],
     });
+  }
+
+  /** The standard launch for `paymentToken`, or null if none is configured. */
+  async getLaunchPreset(paymentToken: Address): Promise<LaunchPreset | null> {
+    const [token, maxSupply, basePrice, slope, maxRaise, liquidityBps] = await this.publicClient.readContract({
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "launchPresets",
+      args: [paymentToken],
+    });
+    if (token === zeroAddress) return null;
+    return { paymentToken: token, maxSupply, basePrice, slope, maxRaise, liquidityBps };
   }
 
   /**
@@ -142,6 +160,34 @@ export class AuctionFlowSDK {
       address: this.auctionAddress,
       abi: tokenAuctionAbi,
       functionName: "sellTokens",
+      args: [auctionId, amount, minProceeds],
+    });
+  }
+
+  /**
+   * `sellTokens` for an auction priced in WETH, paid out in plain ETH. Takes
+   * the same `minProceeds` / `slippageBps` options.
+   */
+  async sellTokensForETH(
+    auctionId: bigint,
+    amount: bigint,
+    options: { minProceeds?: bigint; slippageBps?: number } = {}
+  ): Promise<Hash> {
+    if (!this.walletClient) throw new Error("Wallet client required");
+
+    const minProceeds =
+      options.minProceeds ??
+      applySellSlippage(
+        (await this.getSellQuote(auctionId, amount)).netProceeds,
+        options.slippageBps ?? DEFAULT_SLIPPAGE_BPS
+      );
+
+    return this.walletClient.writeContract({
+      chain: this.chain,
+      account: this.walletClient.account!,
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "sellTokensForETH",
       args: [auctionId, amount, minProceeds],
     });
   }
@@ -191,6 +237,43 @@ export class AuctionFlowSDK {
     });
 
     return hash;
+  }
+
+  /**
+   * `buyTokens` for an auction priced in WETH, paid in plain ETH, with no
+   * token approval. The ETH sent is the most the purchase may cost (`maxCost`,
+   * or a fresh quote plus `slippageBps`); whatever it doesn't use is refunded
+   * in the same transaction.
+   */
+  async buyTokensWithETH(
+    auctionId: bigint,
+    amount: bigint,
+    options: { maxCost?: bigint; slippageBps?: number } = {}
+  ): Promise<Hash> {
+    if (!this.walletClient) throw new Error("Wallet client required");
+
+    const maxCost =
+      options.maxCost ??
+      applySlippage(
+        (await this.getQuote(auctionId, amount)).totalCost,
+        options.slippageBps ?? DEFAULT_SLIPPAGE_BPS
+      );
+
+    return this.walletClient.writeContract({
+      chain: this.chain,
+      account: this.walletClient.account!,
+      address: this.auctionAddress,
+      abi: tokenAuctionAbi,
+      functionName: "buyTokensWithETH",
+      args: [auctionId, amount],
+      value: maxCost,
+    });
+  }
+
+  /** Is this auction priced in WETH, so it can be bought and sold with plain ETH? */
+  async isPricedInETH(auctionId: bigint): Promise<boolean> {
+    const auction = await this.getAuction(auctionId);
+    return auction.paymentToken.toLowerCase() === WETH_ADDRESSES[this.chainId].toLowerCase();
   }
 
   /**

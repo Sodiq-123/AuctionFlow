@@ -58,7 +58,7 @@ contract TokenAuctionMigrateTest is Test {
         usdc = new MockUSDC();
         auction = new TokenAuction(
             makeAddr("feeRecipient"), 250, INonfungiblePositionManager(address(new RejectingPositionManager()))
-        );
+        , IWETH9(address(0)));
         auction.setPaymentTokenAllowed(address(usdc), true);
         usdc.transfer(buyer, 1_000e6);
     }

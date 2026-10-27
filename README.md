@@ -155,13 +155,13 @@ Linear bonding curve price discovery. Price = `basePrice + slope × currentSuppl
 
 An auction's life:
 
-1. **Launch.** One call creates the token, either with the protocol's standard preset (`launch(name, symbol, metadataURI)`) or with custom curve parameters (`createAuction`). Trading starts immediately.
-2. **Trading on the curve.** Anyone can buy, and sell back to the curve, with slippage bounds (`maxCost`, `minProceeds`). Buys round up and sells round down, so the contract can always buy back every outstanding token. Tokens can't be transferred until graduation; selling back is how holders exit.
+1. **Launch.** One call creates the token, either with the protocol's standard preset for a payment token (`launch(name, symbol, metadataURI, paymentToken)`, in ETH or USDC) or with custom curve parameters (`createAuction`). Trading starts immediately.
+2. **Trading on the curve.** Anyone can buy, and sell back to the curve, with slippage bounds (`maxCost`, `minProceeds`). Tokens priced in WETH trade in plain ETH (`buyTokensWithETH`, `sellTokensForETH`): the contract wraps and unwraps it in the same call, and refunds what a buy doesn't use. Buys round up and sells round down, so the contract can always buy back every outstanding token. Tokens can't be transferred until graduation; selling back is how holders exit.
 3. **Graduation.** The purchase that reaches the threshold (`maxRaise`) is partially filled and closes the curve.
 4. **Migration.** Anyone calls `migrate`. A creator-chosen share of the raise (20–100%) is paired with newly minted tokens in a 1% Uniswap v3 pool at the auction's final price, and the position is locked in the contract forever. The token unlocks for trading.
 5. **Payouts.** The creator withdraws the rest of the raise. Anyone can collect the pool's trading fees; the creator claims their share, and the protocol's share is paid to its fee recipient. Payouts are claimed rather than sent, so no recipient can block a trade or a migration.
 
-New launches can only be priced in payment tokens the owner has approved (USDC). The owner can pause new launches and curve buys in an emergency, but never selling back, migration, withdrawals or claims.
+New launches can only be priced in payment tokens the owner has approved (USDC and WETH). The owner can pause new launches and curve buys in an emergency, but never selling back, migration, withdrawals or claims.
 
 **Security:** [`contracts/THREAT_MODEL.md`](contracts/THREAT_MODEL.md) covers what's at risk, what the owner can and cannot do, the attacks considered and how each is handled. The contracts have not been externally audited.
 
@@ -170,7 +170,8 @@ contracts/src/
 ├── AuctionToken.sol             ERC-20 with capped minting and a transfer lock until migration
 ├── BondingCurve.sol             Pure math library (integral of linear curve, rounded up)
 ├── TokenAuction.sol             Main auction contract: sale, migration, payouts
-└── interfaces/IUniswapV3.sol    The Uniswap v3 calls migration needs
+├── interfaces/IUniswapV3.sol    The Uniswap v3 calls migration needs
+└── interfaces/IWETH9.sol        Wrapped ether, for paying in ETH
 ```
 
 ### Run tests

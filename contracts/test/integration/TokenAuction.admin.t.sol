@@ -44,7 +44,7 @@ contract TokenAuctionAdminTest is Test {
 
     function setUp() public {
         usdc = new MockUSDC();
-        auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
+        auction = new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")), IWETH9(address(0)));
         auction.setPaymentTokenAllowed(address(usdc), true);
         usdc.transfer(buyer, 10_000_000e6);
     }
@@ -77,18 +77,18 @@ contract TokenAuctionAdminTest is Test {
 
     function test_constructor_rejectsZeroFeeRecipient() public {
         vm.expectRevert("Zero fee recipient");
-        new TokenAuction(address(0), FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")));
+        new TokenAuction(address(0), FEE_BPS, INonfungiblePositionManager(makeAddr("positionManager")), IWETH9(address(0)));
     }
 
     function test_constructor_rejectsZeroPositionManager() public {
         vm.expectRevert("Zero position manager");
-        new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(address(0)));
+        new TokenAuction(feeRecipient, FEE_BPS, INonfungiblePositionManager(address(0)), IWETH9(address(0)));
     }
 
     function test_constructor_rejectsFeeAboveCap() public {
         uint256 cap = auction.MAX_FEE_BPS();
         vm.expectRevert("Fee too high");
-        new TokenAuction(feeRecipient, cap + 1, INonfungiblePositionManager(makeAddr("positionManager")));
+        new TokenAuction(feeRecipient, cap + 1, INonfungiblePositionManager(makeAddr("positionManager")), IWETH9(address(0)));
     }
 
     // --- fee recipient ------------------------------------------------------

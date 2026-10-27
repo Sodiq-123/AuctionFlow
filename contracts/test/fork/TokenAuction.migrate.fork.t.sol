@@ -75,7 +75,7 @@ abstract contract MigrateForkBase is Test {
 
         deployCodeTo("TokenAuction.migrate.fork.t.sol:ForkUSDC", paymentAddress());
         usdc = ForkUSDC(paymentAddress());
-        auction = new TokenAuction(feeRecipient, 250, NPM);
+        auction = new TokenAuction(feeRecipient, 250, NPM, IWETH9(address(0)));
         auction.setPaymentTokenAllowed(address(usdc), true);
         auction.setDefaultLpFeeShareBps(LP_FEE_SHARE_BPS);
         swapper = new Swapper();
@@ -218,7 +218,7 @@ abstract contract MigrateForkBase is Test {
             })
         );
         vm.prank(creator);
-        uint256 id = auction.launch("Cheap", "CHEAP", "ipfs://cheap");
+        uint256 id = auction.launch("Cheap", "CHEAP", "ipfs://cheap", address(usdc));
         vm.startPrank(buyer);
         usdc.approve(address(auction), type(uint256).max);
         auction.buyTokens(id, 1_000_000_000e18, type(uint256).max); // fills to the threshold

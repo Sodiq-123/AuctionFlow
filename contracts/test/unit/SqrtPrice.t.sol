@@ -3,7 +3,7 @@ import "forge-std/Test.sol";
 import "../../src/TokenAuction.sol";
 
 contract SqrtPriceHarness is TokenAuction {
-    constructor() TokenAuction(address(1), 0, INonfungiblePositionManager(address(1))) {}
+    constructor() TokenAuction(address(1), 0, INonfungiblePositionManager(address(1)), IWETH9(address(0))) {}
 
     function sqrtPriceX96(uint256 price, bool tokenIsToken0) external pure returns (uint160) {
         return _sqrtPriceX96(price, tokenIsToken0);
