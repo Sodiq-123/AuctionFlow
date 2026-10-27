@@ -146,7 +146,9 @@ export function fillPurchase(
   if (cost === remaining) return { amount: requested, cost, fillsAuction: true };
 
   const amount = maxBuyable(currentSupply, remaining, basePrice, slope, requested);
-  if (amount === 0n) throw new Error("Auction is sold out");
+  // What's left can't buy even one token wei: the contract graduates the
+  // auction without a purchase rather than revert.
+  if (amount === 0n) return { amount: 0n, cost: 0n, fillsAuction: true };
   return {
     amount,
     cost: calculateBuyCost(currentSupply, amount, basePrice, slope),

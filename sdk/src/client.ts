@@ -26,23 +26,6 @@ import {
 import { CHAINS } from "./utils/chains";
 
 /** Shape of the nested tuple returned by the on-chain `auctions(id)` getter. */
-interface RawAuction {
-  config: {
-    token: Address;
-    paymentToken: Address;
-    basePrice: bigint;
-    slope: bigint;
-    maxRaise: bigint;
-    creator: Address;
-    protocolFeeBps: bigint;
-    liquidityBps: bigint;
-    lpFeeShareBps: bigint;
-  };
-  state: number;
-  totalRaised: bigint;
-  totalSold: bigint;
-}
-
 export class AuctionFlowSDK {
   public readonly publicClient: PublicClient;
   public readonly walletClient?: WalletClient;
@@ -351,15 +334,30 @@ export class AuctionFlowSDK {
 
   // Read: Get auction data
   async getAuction(auctionId: bigint): Promise<AuctionData> {
-    const result = await this.publicClient.readContract({
+    // A getter with several return values comes back as an array, in order:
+    // [config, state, totalRaised, totalSold].
+    const [config, state, totalRaised, totalSold] = await this.publicClient.readContract({
       address: this.auctionAddress,
       abi: tokenAuctionAbi,
       functionName: "auctions",
       args: [auctionId],
     });
 
-    // Parse the tuple returned by the contract
-    return this.parseAuctionResult(auctionId, result as unknown as RawAuction);
+    return {
+      id: auctionId,
+      token: config.token,
+      paymentToken: config.paymentToken,
+      creator: config.creator,
+      basePrice: config.basePrice,
+      slope: config.slope,
+      maxRaise: config.maxRaise,
+      state,
+      totalRaised,
+      totalSold,
+      protocolFeeBps: config.protocolFeeBps,
+      liquidityBps: config.liquidityBps,
+      lpFeeShareBps: config.lpFeeShareBps,
+    };
   }
 
   // Read: Get buy quote (off-chain calculation)
@@ -395,22 +393,4 @@ export class AuctionFlowSDK {
     }) as Promise<bigint>;
   }
 
-  private parseAuctionResult(id: bigint, raw: RawAuction): AuctionData {
-    // Mirrors the AuctionData struct returned by the public `auctions` getter.
-    return {
-      id,
-      token: raw.config.token,
-      paymentToken: raw.config.paymentToken,
-      creator: raw.config.creator,
-      basePrice: raw.config.basePrice,
-      slope: raw.config.slope,
-      maxRaise: raw.config.maxRaise,
-      state: raw.state,
-      totalRaised: raw.totalRaised,
-      totalSold: raw.totalSold,
-      protocolFeeBps: raw.config.protocolFeeBps,
-      liquidityBps: raw.config.liquidityBps,
-      lpFeeShareBps: raw.config.lpFeeShareBps,
-    };
-  }
 }

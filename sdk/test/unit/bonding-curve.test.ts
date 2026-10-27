@@ -124,8 +124,11 @@ describe("fillPurchase", () => {
     expect(f.fillsAuction).toBe(true);
   });
 
-  it("throws when nothing is left to buy", () => {
-    expect(() => fillPurchase(0n, T, BASE, SLOPE, 10_500_000n, 10_500_000n)).toThrow(/sold out/);
+  // Mirrors the contract: when what's left can't buy a single token wei, the
+  // purchase graduates the auction and charges nothing.
+  it("graduates without a purchase when only dust is left to raise", () => {
+    const f = fillPurchase(1000n * T, T, BASE, SLOPE, 10_500_000n - 1n, 10_500_000n);
+    expect(f).toEqual({ amount: 0n, cost: 0n, fillsAuction: true });
   });
 });
 

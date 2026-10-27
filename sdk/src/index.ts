@@ -4,3 +4,4 @@ export * from "./types";
 export * from "./constants/addresses";
 export * from "./constants/protocol";
 export * from "./utils/bonding-curve";
+export { tokenAuctionAbi } from "./abis/token-auction";
