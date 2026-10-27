@@ -189,11 +189,13 @@ The migration tests in `test/fork/` run against real Uniswap v3 on a fork of Bas
 cd contracts
 cp .env.example .env   # fill in PRIVATE_KEY, BASE_SEPOLIA_RPC_URL, FEE_RECIPIENT
 
-forge script script/Deploy.s.sol \
+NEW_OWNER=<your Safe> forge script script/Deploy.s.sol \
   --rpc-url $BASE_SEPOLIA_RPC_URL \
   --broadcast \
   --verify
 ```
+
+One broadcast deploys and configures the contract: USDC and WETH allowed, a 1% protocol fee and a 20% share of pool fees (`DEFAULT_FEE_BPS`, `LP_FEE_SHARE_BPS`), and on Base Sepolia the standard launch presets (10 USDC and 0.01 ETH goals). With `NEW_OWNER` set it starts the ownership handover, which the Safe completes by calling `acceptOwnership`.
 
 ---
 
