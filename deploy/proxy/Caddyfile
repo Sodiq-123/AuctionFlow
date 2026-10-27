@@ -1,0 +1,15 @@
+# One block per site. Replace the domain with yours; its DNS A record must
+# point at this server before Caddy can get a certificate.
+#
+# Caddy replaces any X-Forwarded-For a client sends with the real client
+# address, so apps behind it can rate-limit by IP.
+
+auctionflow.example.com {
+	encode zstd gzip
+	reverse_proxy auctionflow-web:3000
+}
+
+# Another project later, for example:
+# blog.example.com {
+# 	reverse_proxy blog:8080
+# }

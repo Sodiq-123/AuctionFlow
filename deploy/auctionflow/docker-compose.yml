@@ -1,0 +1,66 @@
+# AuctionFlow: Postgres, the indexer and the web app. Nothing here is exposed
+# to the internet; the shared Caddy proxy reaches the web app over the "proxy"
+# network. Run from this directory: docker compose up -d --build
+name: auctionflow
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: auctionflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: auctionflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auctionflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  indexer:
+    build:
+      context: ../..
+      dockerfile: indexer/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://auctionflow:${POSTGRES_PASSWORD}@postgres:5432/auctionflow
+      # A new schema name makes the indexer re-sync from scratch, e.g. after
+      # a schema change or a new contract deployment.
+      DATABASE_SCHEMA: ${INDEXER_SCHEMA:-auctionflow}
+      PONDER_RPC_URL_84532: ${RPC_URL:-https://sepolia.base.org}
+    networks:
+      - internal
+
+  web:
+    build:
+      context: ../..
+      dockerfile: web/Dockerfile
+      args:
+        NEXT_PUBLIC_CHAIN_ID: ${CHAIN_ID:-84532}
+        NEXT_PUBLIC_RPC_URL: ${PUBLIC_RPC_URL:-}
+        NEXT_PUBLIC_IPFS_GATEWAY: ${IPFS_GATEWAY:-https://ipfs.io/ipfs/}
+    container_name: auctionflow-web
+    restart: unless-stopped
+    depends_on:
+      - indexer
+    environment:
+      INDEXER_URL: http://indexer:42069
+      PINATA_JWT: ${PINATA_JWT:-}
+    networks:
+      - internal
+      - proxy
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
+  proxy:
+    external: true

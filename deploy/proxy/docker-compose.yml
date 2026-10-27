@@ -1,0 +1,25 @@
+# The VPS's single public entry point. Caddy terminates HTTPS (certificates
+# are automatic) and forwards each domain to a project on the "proxy" network.
+# Run once per server: docker compose up -d
+services:
+  caddy:
+    image: caddy:2.11-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - proxy
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  proxy:
+    name: proxy

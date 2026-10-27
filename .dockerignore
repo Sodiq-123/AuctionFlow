@@ -1,0 +1,15 @@
+# Keep secrets and build output out of every image's build context.
+**/.env
+**/.env.*
+!**/.env.example
+contracts
+CODEBASE.md
+.git
+**/node_modules
+**/.next
+**/.ponder
+**/generated
+sdk/dist
+examples/*
+!examples/package.json
+deploy

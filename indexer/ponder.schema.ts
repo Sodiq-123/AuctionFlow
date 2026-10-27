@@ -12,6 +12,11 @@ export const auction = onchainTable("auction", (t) => ({
   liquidityBps: t.bigint().notNull(),
   // Off-chain metadata for the token, such as its image.
   metadataUri: t.text().notNull().default(""),
+  // Read from the token contract once, at creation: both are immutable.
+  name: t.text().notNull().default(""),
+  symbol: t.text().notNull().default(""),
+  maxSupply: t.bigint().notNull().default(0n),
+  paymentDecimals: t.integer().notNull().default(18),
   state: t.text().notNull(),
   totalRaised: t.bigint().notNull(),
   totalSold: t.bigint().notNull(),

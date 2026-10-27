@@ -7,8 +7,9 @@
     "build": "pnpm --filter auctionflow-sdk build",
     "test:contracts": "forge test --root contracts",
     "test:sdk": "pnpm --filter auctionflow-sdk test",
-    "typecheck": "pnpm --filter auctionflow-sdk exec tsc --noEmit && pnpm --filter auctionflow-indexer exec tsc --noEmit",
-    "dev:indexer": "pnpm --filter auctionflow-indexer dev"
+    "typecheck": "pnpm --filter auctionflow-sdk exec tsc --noEmit && pnpm --filter auctionflow-indexer exec tsc --noEmit && pnpm --filter auctionflow-web exec tsc --noEmit",
+    "dev:indexer": "pnpm --filter auctionflow-indexer dev",
+    "dev:web": "pnpm --filter auctionflow-web dev"
   },
   "repository": {
     "type": "git",

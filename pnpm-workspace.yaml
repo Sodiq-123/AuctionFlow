@@ -2,5 +2,6 @@ packages:
   - "sdk"
   - "indexer"
   - "examples"
+  - "web"
 allowBuilds:
   esbuild: true

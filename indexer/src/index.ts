@@ -1,11 +1,13 @@
 import { ponder } from "ponder:registry";
 import * as schema from "../ponder.schema";
-import { zeroAddress } from "viem";
+import { erc20Abi, parseAbi, zeroAddress } from "viem";
 
 // Mirrors BondingCurve: supplies and amounts are in token wei (18 decimals);
 // prices are payment units per whole token with 18 extra decimals (WAD), so
 // currentPrice and pricePerToken are both in those units.
 const TOKEN_SCALE = 10n ** 18n;
+
+const AuctionTokenAbi = parseAbi(["function maxSupply() view returns (uint256)"]);
 const SCALE = TOKEN_SCALE * 10n ** 18n;
 
 // ─── AuctionCreated ───
@@ -19,6 +21,15 @@ ponder.on("TokenAuction:AuctionCreated", async ({ event, context }) => {
 
   const id = auctionId.toString();
 
+  // AuctionCreated doesn't carry them, and a feed of launches needs them to
+  // show names and market caps.
+  const [name, symbol, maxSupply, paymentDecimals] = await Promise.all([
+    context.client.readContract({ abi: erc20Abi, address: token, functionName: "name" }),
+    context.client.readContract({ abi: erc20Abi, address: token, functionName: "symbol" }),
+    context.client.readContract({ abi: AuctionTokenAbi, address: token, functionName: "maxSupply" }),
+    context.client.readContract({ abi: erc20Abi, address: paymentToken, functionName: "decimals" }),
+  ]);
+
   await db.insert(schema.auction).values({
     id,
     auctionId,
@@ -29,6 +40,10 @@ ponder.on("TokenAuction:AuctionCreated", async ({ event, context }) => {
     slope,
     maxRaise,
     metadataUri: metadataURI,
+    name,
+    symbol,
+    maxSupply,
+    paymentDecimals,
     liquidityBps,
     state: "ACTIVE",
     totalRaised: 0n,

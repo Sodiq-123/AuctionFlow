@@ -15,11 +15,11 @@ export default createConfig({
   chains: {
     baseSepolia: {
       id: 84532,
-      rpc: process.env.PONDER_RPC_URL_84532 || "https://sepolia.base.org",
+      rpc: (process.env.PONDER_RPC_URL_84532 || "https://sepolia.base.org").split(","),
     },
     base: {
       id: 8453,
-      rpc: process.env.PONDER_RPC_URL_8453 || "https://mainnet.base.org",
+      rpc: (process.env.PONDER_RPC_URL_8453 || "https://mainnet.base.org").split(","),
     },
   },
   contracts: {

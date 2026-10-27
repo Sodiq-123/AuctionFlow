@@ -1,9 +1,10 @@
 # AuctionFlow
 
-An open-source token launchpad for EVM chains: launch a token in one call, trade it on a bonding curve, and graduate it to a Uniswap v3 pool. Built from Solidity contracts, a TypeScript SDK, and a Ponder indexer with a GraphQL API.
+An open-source token launchpad for EVM chains: launch a token in one call, trade it on a bonding curve, and graduate it to a Uniswap v3 pool. Built from Solidity contracts, a TypeScript SDK, a Ponder indexer with a GraphQL API, and a Next.js web app.
 
 [![Contracts](https://github.com/Sodiq-123/AuctionFlow/actions/workflows/contracts-test.yml/badge.svg)](https://github.com/Sodiq-123/AuctionFlow/actions/workflows/contracts-test.yml)
 [![SDK](https://github.com/Sodiq-123/AuctionFlow/actions/workflows/sdk-test.yml/badge.svg)](https://github.com/Sodiq-123/AuctionFlow/actions/workflows/sdk-test.yml)
+[![Web](https://github.com/Sodiq-123/AuctionFlow/actions/workflows/web-test.yml/badge.svg)](https://github.com/Sodiq-123/AuctionFlow/actions/workflows/web-test.yml)
 [![npm](https://img.shields.io/npm/v/auctionflow-sdk)](https://www.npmjs.com/package/auctionflow-sdk)
 
 ---
@@ -123,6 +124,8 @@ Amounts are in base units: USDC has 6 decimals and FLOW has 18. `currentPrice` i
 | [`contracts/`](contracts/) | Solidity contracts built with Foundry |
 | [`sdk/`](sdk/) | TypeScript SDK — install as `auctionflow-sdk` |
 | [`indexer/`](indexer/) | Ponder indexer exposing a GraphQL API |
+| [`web/`](web/) | Next.js launchpad app: launch, trade, graduate and claim from the browser |
+| [`deploy/`](deploy/) | Docker Compose setup and a step-by-step guide for hosting on a VPS |
 | [`examples/`](examples/) | End-to-end usage scripts |
 
 ---
@@ -259,6 +262,24 @@ if (!(await sdk.hasWithdrawnProceeds(0n))) {
 
 ---
 
+## Web app
+
+A Next.js app on top of the SDK and the indexer:
+
+- **Launches:** the latest tokens with their market cap and progress to graduation.
+- **Token page:** price chart, trades, a buy/sell box with quotes computed by the SDK's curve math and a 1% slippage limit, then migration, the Uniswap market and fee collection once the token graduates.
+- **Payouts:** a creator's withdrawal and any claimable pool fees, for the connected wallet.
+- **Launch form:** name, symbol, description, links and an image pinned to IPFS through Pinata.
+
+```bash
+pnpm --filter auctionflow-sdk build   # the app uses the SDK's build output
+cd web
+cp .env.example .env.local            # INDEXER_URL, and PINATA_JWT for images
+pnpm dev                              # http://localhost:3000, with the indexer running
+```
+
+The browser never talks to the indexer directly: the app's `/indexer/graphql` route forwards queries, so the indexer stays on a private network. To host everything on your own server, see [`deploy/README.md`](deploy/README.md).
+
 ## Indexer
 
 Ponder-based indexer that listens to on-chain events and exposes a **GraphQL API** over PostgreSQL.
@@ -376,6 +397,7 @@ This means early buyers pay less; later buyers pay more. The off-chain SDK calcu
 | `contracts-test.yml` | PR touching `contracts/` | `forge test -vvv` |
 | `sdk-test.yml` | PR touching `sdk/` | Type check + vitest + build |
 | `indexer-test.yml` | PR touching `indexer/` | TypeScript type check |
+| `web-test.yml` | PR touching `web/` or `sdk/` | Type check + production build + Docker image |
 | `sdk-release.yml` | Tag `sdk-v*` | Build + test + publish to npm |
 
 ### Releasing the SDK

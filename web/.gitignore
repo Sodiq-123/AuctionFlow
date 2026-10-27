@@ -1,0 +1,7 @@
+.next/
+next-env.d.ts
+*.tsbuildinfo
+.env*.local
+.env
+# Written by `next dev` for coding agents
+AGENTS.md
