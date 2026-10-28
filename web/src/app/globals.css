@@ -1,23 +1,127 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #0b0d10;
-  --color-panel: #14171c;
-  --color-panel-2: #1b1f26;
-  --color-line: #262b33;
-  --color-muted: #8b93a1;
-  --color-accent: #4ade80;
-  --color-accent-ink: #052e16;
-  --color-danger: #f87171;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-:root {
-  color-scheme: dark;
+  --color-ground: #f5f7fb;
+  --color-board: #e8ecf4;
+  --color-ink: #0a0b0d;
+  --color-muted: #5b616e;
+  --color-faint: #8a91a0;
+  --color-line: #e8ecf4;
+  --color-blue: #0052ff;
+  --color-blue-edge: #0039b3;
+  --color-blue-deep: #00287f;
+  --color-blue-tint: #eef3ff;
+  --color-blue-soft: #dce6ff;
+  --color-violet: #7b5cff;
+  --color-mint: #3fbf86;
+  --color-mint-bright: #5be3a6;
+  --color-up: #0a7a4b;
+  --color-up-tint: #e6f4ec;
+  --color-up-ink: #0a5c39;
+  --color-sell: #9a4b00;
+  --color-sell-tint: #fff1e6;
+  --color-sell-edge: #f5cfae;
+  --color-danger: #b42318;
+  --color-danger-tint: #fef3f2;
+  --color-warn: #6b4500;
+  --color-warn-tint: #fff6e0;
+  --color-unicorn: #a3156b;
+  --color-unicorn-tint: #fdebf5;
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-bricolage), var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
 }
 
 body {
-  background: var(--color-bg);
-  color: #e6e9ee;
+  background: var(--color-ground);
+  color: var(--color-ink);
+}
+
+/* Raised ("chunky") buttons: a solid edge under the face that shrinks when
+   pressed, and disappears when the button is disabled. */
+@layer components {
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 18px;
+    font-weight: 800;
+    transition: transform 80ms ease, box-shadow 80ms ease, filter 120ms ease;
+    box-shadow: 0 var(--edge, 5px) 0 var(--edge-color, transparent);
+    cursor: pointer;
+  }
+  .btn:hover:not(:disabled) {
+    filter: brightness(1.04);
+  }
+  .btn:active:not(:disabled) {
+    transform: translateY(calc(var(--edge, 5px) - 2px));
+    box-shadow: 0 2px 0 var(--edge-color, transparent);
+  }
+  .btn:disabled {
+    background: var(--color-board);
+    color: var(--color-faint);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+  .btn:focus-visible {
+    outline: 3px solid var(--color-violet);
+    outline-offset: 3px;
+  }
+  .btn-blue {
+    background: var(--color-blue);
+    color: #fff;
+    --edge-color: var(--color-blue-edge);
+  }
+  .btn-white {
+    background: #fff;
+    color: var(--color-ink);
+    --edge-color: #d5dae3;
+    box-shadow: inset 0 0 0 2px var(--color-line), 0 var(--edge, 5px) 0 var(--edge-color);
+  }
+  .btn-tint {
+    background: var(--color-blue-tint);
+    color: var(--color-blue-edge);
+    --edge-color: #c9d6f5;
+  }
+  .btn-sell {
+    background: var(--color-sell-tint);
+    color: var(--color-sell);
+    --edge-color: var(--color-sell-edge);
+  }
+  .btn-ink {
+    background: var(--color-ink);
+    color: #fff;
+    --edge-color: #3a3f4a;
+  }
+  .card {
+    background: #fff;
+    border-radius: 28px;
+    box-shadow: 0 6px 0 #e1e6f0;
+  }
+  .field {
+    width: 100%;
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: inset 0 0 0 2px var(--color-line);
+    padding: 0 14px;
+    outline: none;
+  }
+  .field:focus {
+    box-shadow: inset 0 0 0 2px var(--color-blue);
+  }
+}
+
+@keyframes ticker {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-ticker {
+    animation: none !important;
+  }
 }

@@ -46,6 +46,7 @@ services:
         NEXT_PUBLIC_CHAIN_ID: ${CHAIN_ID:-84532}
         NEXT_PUBLIC_RPC_URL: ${PUBLIC_RPC_URL:-}
         NEXT_PUBLIC_IPFS_GATEWAY: ${IPFS_GATEWAY:-https://ipfs.io/ipfs/}
+        NEXT_PUBLIC_SITE_URL: ${SITE_URL:-http://localhost:3000}
     container_name: auctionflow-web
     restart: unless-stopped
     depends_on:

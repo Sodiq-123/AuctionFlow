@@ -124,7 +124,7 @@ Amounts are in base units: USDC has 6 decimals and FLOW has 18. `currentPrice` i
 | [`contracts/`](contracts/) | Solidity contracts built with Foundry |
 | [`sdk/`](sdk/) | TypeScript SDK — install as `auctionflow-sdk` |
 | [`indexer/`](indexer/) | Ponder indexer exposing a GraphQL API |
-| [`web/`](web/) | Next.js launchpad app: launch, trade, graduate and claim from the browser |
+| [`web/`](web/) | Next.js launchpad app: create coins in ETH or USDC, trade on the curve and then through Uniswap, claim earnings, from desktop or phone |
 | [`deploy/`](deploy/) | Docker Compose setup and a step-by-step guide for hosting on a VPS |
 | [`examples/`](examples/) | End-to-end usage scripts |
 

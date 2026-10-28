@@ -106,4 +106,4 @@ All settings are in `auctionflow/.env`; see `.env.example`.
 
 - `RPC_URL`: what the indexer reads the chain through. One URL or several separated by commas. Free plans and public endpoints rate-limit, which slows the first sync; a paid RPC keeps it fast.
 - `PINATA_JWT`: lets creators upload a token image. Create a key at pinata.cloud with permission to upload files. Without it, tokens launch without images.
-- `CHAIN_ID`, `PUBLIC_RPC_URL`, `IPFS_GATEWAY`: compiled into the web app at build time, so change them and rebuild.
+- `CHAIN_ID`, `PUBLIC_RPC_URL`, `IPFS_GATEWAY`, `SITE_URL`: compiled into the web app at build time, so change them and rebuild. Set `SITE_URL` to the site's public address (`https://…`) so share links and link previews point at it.

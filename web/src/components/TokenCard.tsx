@@ -3,47 +3,51 @@
 import Link from "next/link";
 import type { AuctionRow } from "@/lib/indexer";
 import { useTokenMetadata } from "@/lib/metadata";
-import { formatUnits } from "viem";
-import { formatAmount, priceToNumber, progressPercent, shortAddress, timeAgo } from "@/lib/format";
-import { TokenImage } from "./TokenImage";
-import { ProgressBar } from "./ProgressBar";
+import { paymentLabel } from "@/lib/config";
+import { formatAmount, formatUsd, marketCap, percentLabel, progressPercent, shortAddress, timeAgo } from "@/lib/format";
+import { toUsd } from "@/lib/prices";
+import { CoinFrame, Progress } from "./ui";
 
-export function TokenCard({ auction }: { auction: AuctionRow }) {
+export function TokenCard({ auction, ethUsd }: { auction: AuctionRow; ethUsd?: number }) {
   const { data: meta } = useTokenMetadata(auction.metadataUri);
-  const percent = progressPercent(auction.totalRaised, auction.maxRaise);
-  // Fully diluted: the curve price times the token's whole supply.
-  const marketCap =
-    priceToNumber(auction.currentPrice, auction.paymentDecimals) * Number(formatUnits(BigInt(auction.maxSupply), 18));
+  const percent = auction.state === "ACTIVE" ? progressPercent(auction.totalRaised, auction.maxRaise) : 100;
+  const cap = marketCap(auction.currentPrice, auction.maxSupply, auction.paymentDecimals);
+  const usd = toUsd(cap, auction.paymentTokenAddress, ethUsd);
+  const status =
+    auction.state === "MIGRATED"
+      ? { text: "🦄 On Uniswap", className: "text-unicorn" }
+      : auction.state === "COMPLETED"
+        ? { text: "Graduated · ready to move", className: "text-up" }
+        : { text: `${percentLabel(percent)} to Uniswap`, className: "text-blue-edge" };
 
   return (
     <Link
       href={`/token/${auction.id}`}
-      className="flex gap-4 rounded-xl border border-line bg-panel p-4 transition hover:border-accent/50 hover:bg-panel-2"
+      className="card flex flex-col gap-3.5 p-5 transition-transform hover:-translate-y-0.5 focus-visible:outline-3 focus-visible:outline-violet"
     >
-      <TokenImage image={meta?.image} symbol={auction.symbol} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-2">
-          <h3 className="truncate font-semibold">
-            {auction.name} <span className="text-muted">${auction.symbol}</span>
-          </h3>
-          {auction.state !== "ACTIVE" && (
-            <span className="shrink-0 rounded bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent">
-              {auction.state === "MIGRATED" ? "On Uniswap" : "Graduated"}
-            </span>
+      <span className="flex items-center gap-3">
+        <CoinFrame image={meta?.image} symbol={auction.symbol} size={60} graduated={auction.state === "MIGRATED"} />
+        <span className="min-w-0">
+          <span className="block truncate font-display text-[21px] font-extrabold tracking-[-0.03em]">{auction.name}</span>
+          <span className="block truncate text-[13px] font-semibold text-muted">
+            ${auction.symbol} · by {shortAddress(auction.creator)} · {timeAgo(auction.createdAt)}
+          </span>
+        </span>
+      </span>
+      {meta?.description && <span className="line-clamp-2 text-sm text-muted">{meta.description}</span>}
+      <span className="flex items-start justify-between gap-2">
+        <span className="text-[13px] font-semibold whitespace-nowrap text-muted">Market cap</span>
+        <span className="text-right">
+          <b className="block text-[17px] whitespace-nowrap">
+            {formatAmount(cap, 3)} {paymentLabel(auction.paymentTokenAddress)}
+          </b>
+          {usd !== undefined && paymentLabel(auction.paymentTokenAddress) === "ETH" && (
+            <span className="text-[13px] text-muted">{formatUsd(usd)}</span>
           )}
-        </div>
-        <p className="mt-0.5 text-xs text-muted">
-          by {shortAddress(auction.creator)} · {timeAgo(auction.createdAt)}
-        </p>
-        {meta?.description && <p className="mt-1 line-clamp-2 text-sm text-muted">{meta.description}</p>}
-        <div className="mt-3 flex items-center justify-between text-xs text-muted">
-          <span>Market cap ${formatAmount(marketCap)}</span>
-          <span>{percent.toFixed(1)}% to graduation</span>
-        </div>
-        <div className="mt-1.5">
-          <ProgressBar percent={percent} />
-        </div>
-      </div>
+        </span>
+      </span>
+      <Progress percent={percent} />
+      <span className={`text-[13px] font-extrabold ${status.className}`}>{status.text}</span>
     </Link>
   );
 }
