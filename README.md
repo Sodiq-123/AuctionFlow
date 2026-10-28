@@ -134,7 +134,7 @@ Amounts are in base units: USDC has 6 decimals and FLOW has 18. `currentPrice` i
 
 ### Requirements
 
-- Node.js v20+, pnpm v10+
+- Node.js v22.12+ (the indexer's Ponder 0.18 requires it), pnpm v10+
 - Foundry — `curl -L https://foundry.paradigm.xyz | bash && foundryup`
 - Docker (for indexer's PostgreSQL)
 
@@ -269,15 +269,16 @@ if (!(await sdk.hasWithdrawnProceeds(0n))) {
 
 A Next.js app on top of the SDK and the indexer:
 
-- **Launches:** the latest tokens with their market cap and progress to graduation.
-- **Token page:** price chart, trades, a buy/sell box with quotes computed by the SDK's curve math and a 1% slippage limit, then migration, the Uniswap market and fee collection once the token graduates.
-- **Payouts:** a creator's withdrawal and any claimable pool fees, for the connected wallet.
-- **Launch form:** name, symbol, description, links and an image pinned to IPFS through Pinata.
+- **Explore:** new, trending (24-hour volume in dollars), about-to-graduate and on-Uniswap coins, search, and a live ticker of trades, launches and graduations.
+- **Coin page:** market-cap chart, progress to graduation, activity (curve and Uniswap trades), holders and the coin's rules. Before graduation, buy and sell on the curve in ETH (one wallet prompt, unused ETH refunded) or USDC (allow, then buy), with quotes from the SDK's curve math and an adjustable price protection. After it, "Move to Uniswap", then buy and sell through Uniswap's router without leaving the page, and collect pool fees.
+- **Create:** name, ticker, description, links, an image pinned to IPFS through Pinata, and ETH or USDC.
+- **Portfolio:** holdings and their value, coins you created with withdrawals and claims (wrapped ETH unwrapped on request), and your trade history.
+- **Wallets:** browser wallets, Coinbase Wallet, and WalletConnect when `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` is set. Dollar values come from Chainlink's ETH / USD feed.
 
 ```bash
 pnpm --filter auctionflow-sdk build   # the app uses the SDK's build output
 cd web
-cp .env.example .env.local            # INDEXER_URL, and PINATA_JWT for images
+cp .env.example .env.local            # INDEXER_URL; optionally PINATA_JWT and a WalletConnect project ID
 pnpm dev                              # http://localhost:3000, with the indexer running
 ```
 
@@ -440,6 +441,15 @@ This means early buyers pay less; later buyers pay more. The off-chain SDK calcu
 | `indexer-test.yml` | PR touching `indexer/` | TypeScript type check |
 | `web-test.yml` | PR touching `web/` or `sdk/` | Type check + production build + Docker image |
 | `sdk-release.yml` | Tag `sdk-v*` | Build + test + publish to npm |
+
+### Dependency advisories
+
+`pnpm audit --prod` reports some advisories that are accepted rather than fixed:
+
+- **kysely, drizzle-orm, @graphql-tools/utils**, pinned by Ponder (the indexer). The kysely flaws are in its MySQL and SQLite dialects and in JSON paths built from user input; Ponder uses Postgres and builds its own queries. The drizzle flaw needs attacker-chosen SQL identifiers; Ponder's come from the schema. The graphql-tools flaws are in gateway and incremental-delivery result merging, which the indexer doesn't use. Their fixes are major upgrades inside Ponder, so they wait for a Ponder release.
+- **zod 3.x**, used by WalletConnect's modal in the browser. The flaw exhausts memory when validating a huge attacker-supplied array; in the browser the worst case is a user's own tab crashing.
+
+Patched releases that stay within what Ponder expects are forced with `overrides` in `pnpm-workspace.yaml` (`@hono/node-server`, `vite`, `@fastify/busboy`, `esbuild`).
 
 ### Releasing the SDK
 

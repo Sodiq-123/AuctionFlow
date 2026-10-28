@@ -46,11 +46,11 @@ export default createConfig({
       abi: AuctionTokenAbi,
       chain: {
         baseSepolia: {
-          address: factory({ address: SEPOLIA_AUCTION, event: created, parameter: "token" }),
+          address: factory({ address: SEPOLIA_AUCTION, event: created, parameter: "token", startBlock: SEPOLIA_START_BLOCK }),
           startBlock: SEPOLIA_START_BLOCK,
         },
         base: {
-          address: factory({ address: BASE_AUCTION, event: created, parameter: "token" }),
+          address: factory({ address: BASE_AUCTION, event: created, parameter: "token", startBlock: BASE_START_BLOCK }),
           startBlock: BASE_START_BLOCK,
         },
       },
@@ -60,11 +60,11 @@ export default createConfig({
       abi: UniswapV3PoolAbi,
       chain: {
         baseSepolia: {
-          address: factory({ address: SEPOLIA_AUCTION, event: migrated, parameter: "pool" }),
+          address: factory({ address: SEPOLIA_AUCTION, event: migrated, parameter: "pool", startBlock: SEPOLIA_START_BLOCK }),
           startBlock: SEPOLIA_START_BLOCK,
         },
         base: {
-          address: factory({ address: BASE_AUCTION, event: migrated, parameter: "pool" }),
+          address: factory({ address: BASE_AUCTION, event: migrated, parameter: "pool", startBlock: BASE_START_BLOCK }),
           startBlock: BASE_START_BLOCK,
         },
       },

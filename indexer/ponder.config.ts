@@ -30,6 +30,8 @@ export default createConfig({
       address: factory({
         address: TOKEN_AUCTION,
         event: getAbiItem({ abi: TokenAuctionAbi.abi, name: "AuctionCreated" }),
+        // Launches only exist from the deployment block on.
+        startBlock: START_BLOCK,
         parameter: "token",
       }),
       startBlock: START_BLOCK,
@@ -41,6 +43,8 @@ export default createConfig({
       address: factory({
         address: TOKEN_AUCTION,
         event: getAbiItem({ abi: TokenAuctionAbi.abi, name: "AuctionMigrated" }),
+        // Launches only exist from the deployment block on.
+        startBlock: START_BLOCK,
         parameter: "pool",
       }),
       startBlock: START_BLOCK,

@@ -5,3 +5,11 @@ packages:
   - "web"
 allowBuilds:
   esbuild: true
+
+# Patched releases of packages Ponder pins with known advisories; each stays
+# within the version Ponder expects. See README "Dependency advisories".
+overrides:
+  "ponder>@hono/node-server": 1.19.17
+  "ponder>vite": 8.3.5
+  "@fastify/busboy": 3.2.4
+  "esbuild@0.28": 0.28.2
