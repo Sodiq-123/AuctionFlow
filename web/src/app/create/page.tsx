@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { parseEventLogs, type Address } from "viem";
 import { useAccount, useSwitchChain, useWalletClient } from "wagmi";
 import { maxBuyable, spotPrice, tokenAuctionAbi, type LaunchPreset } from "auctionflow-sdk";
-import { chain, isWeth, siteUrl, usdcAddress, wethAddress } from "@/lib/config";
+import { chain, isWeth, siteOrigin, usdcAddress, wethAddress } from "@/lib/config";
 import { readSdk, writeSdk } from "@/lib/sdk";
 import { useTx } from "@/lib/tx";
 import { useAuctions } from "@/lib/queries";
@@ -356,7 +356,7 @@ const CONFETTI = [
 /** The moment after launch: the coin, confetti, and ways to share it. */
 function Live({ coin, image }: { coin: { id: string; name: string; symbol: string }; image: string | null }) {
   const [copied, setCopied] = useState(false);
-  const url = `${siteUrl}/token/${coin.id}`;
+  const url = `${siteOrigin()}/token/${coin.id}`;
   const tweet = `https://x.com/intent/post?text=${encodeURIComponent(`I just launched $${coin.symbol} on AuctionFlow 🚀`)}&url=${encodeURIComponent(url)}`;
   return (
     <section className="relative mx-auto flex max-w-[560px] flex-col items-center gap-5 overflow-hidden rounded-[36px] bg-[linear-gradient(160deg,#0047E0,#2E5BFF_55%,#6B4DFF)] px-6 pt-16 pb-8 text-center text-white">

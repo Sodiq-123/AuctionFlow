@@ -10,7 +10,15 @@ export const auctionAddress = AUCTION_ADDRESSES[chainId];
 export const usdcAddress = USDC_ADDRESSES[chainId];
 export const wethAddress = WETH_ADDRESSES[chainId];
 export const explorerUrl = chain.blockExplorers.default.url;
-export const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+
+/**
+ * The site's own address. In the browser, wherever the page is open; on the
+ * server, SITE_URL if set (the coin pages read it from the request instead,
+ * see lib/origin.ts).
+ */
+export function siteOrigin(): string {
+  return typeof window !== "undefined" ? window.location.origin : process.env.SITE_URL || "http://localhost:3000";
+}
 
 /** Uniswap v3 periphery, for trading a token after it migrates. */
 export const uniswap: { router: Address; quoter: Address; appChain: string } =

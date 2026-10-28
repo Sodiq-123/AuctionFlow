@@ -75,9 +75,10 @@ function useWalletChoices(): Connector[] {
   const announced = connectors.filter((c) => c.type === "injected" && c.id !== "injected");
   const generic = connectors.find((c) => c.id === "injected");
   const coinbase = connectors.find((c) => c.type === "coinbaseWallet");
+  const walletConnect = connectors.find((c) => c.type === "walletConnect");
   // The generic entry only helps when no wallet announced itself but one is present.
   const hasLegacyWallet = typeof window !== "undefined" && "ethereum" in window;
-  return [...announced, ...(announced.length === 0 && hasLegacyWallet && generic ? [generic] : []), ...(coinbase ? [coinbase] : [])];
+  return [...announced, ...(announced.length === 0 && hasLegacyWallet && generic ? [generic] : []), ...(coinbase ? [coinbase] : []), ...(walletConnect ? [walletConnect] : [])];
 }
 
 export function SignInSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -92,10 +93,15 @@ export function SignInSheet({ open, onClose }: { open: boolean; onClose: () => v
         {choices.map((connector) => {
           const pending = isPending && variables?.connector === connector;
           const isCoinbase = connector.type === "coinbaseWallet";
+          const isWalletConnect = connector.type === "walletConnect";
           return (
             <button
               key={connector.uid}
-              onClick={() => connect({ connector })}
+              onClick={() => {
+                // WalletConnect opens its own QR window; ours steps aside for it.
+                if (isWalletConnect) onClose();
+                connect({ connector });
+              }}
               disabled={isPending}
               className="flex h-[64px] items-center gap-3 rounded-[18px] bg-ground px-4 text-left font-bold hover:bg-blue-tint disabled:opacity-60"
             >
@@ -103,14 +109,24 @@ export function SignInSheet({ open, onClose }: { open: boolean; onClose: () => v
                 // eslint-disable-next-line @next/next/no-img-element -- the wallet's own data-URI icon
                 <img src={connector.icon} alt="" className="h-9 w-9 rounded-[10px]" />
               ) : (
-                <span className={`flex h-9 w-9 items-center justify-center rounded-[10px] text-xs font-extrabold text-white ${isCoinbase ? "bg-blue" : "bg-ink"}`}>
-                  {isCoinbase ? "CB" : "W"}
+                <span
+                  className={`flex h-9 w-9 items-center justify-center rounded-[10px] text-xs font-extrabold text-white ${
+                    isCoinbase ? "bg-blue" : isWalletConnect ? "bg-[#3B99FC]" : "bg-ink"
+                  }`}
+                >
+                  {isCoinbase ? "CB" : isWalletConnect ? "WC" : "W"}
                 </span>
               )}
               <span className="flex-1">
                 {connector.id === "injected" ? "Browser wallet" : connector.name}
                 <span className="block text-[13px] font-medium text-muted">
-                  {pending ? "Check your wallet…" : isCoinbase ? "App, extension or passkey" : "In this browser"}
+                  {pending
+                    ? "Check your wallet…"
+                    : isCoinbase
+                      ? "App, extension or passkey"
+                      : isWalletConnect
+                        ? "Scan a QR code with any wallet app"
+                        : "In this browser"}
                 </span>
               </span>
             </button>

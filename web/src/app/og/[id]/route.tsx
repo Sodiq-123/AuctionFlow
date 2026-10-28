@@ -3,15 +3,14 @@ import { fetchAuction } from "@/lib/indexer";
 import { paymentLabel } from "@/lib/config";
 import { formatAmount, marketCap, percentLabel, progressPercent } from "@/lib/format";
 
-export const alt = "A coin on AuctionFlow";
-export const size = { width: 1200, height: 630 };
-export const contentType = "image/png";
+const size = { width: 1200, height: 630 };
 
 /**
  * The card X, Telegram and others show for a shared coin link, drawn fresh so
- * the market cap and progress are current when someone opens the post.
+ * the market cap and progress are current when someone opens the post. The
+ * coin page points its og:image here (see token/[id]/page.tsx).
  */
-export default async function Image({ params }: { params: Promise<{ id: string }> }) {
+export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const row = /^\d+$/.test(id) ? await fetchAuction(id).catch(() => null) : null;
 
@@ -61,6 +60,6 @@ export default async function Image({ params }: { params: Promise<{ id: string }
         </div>
       </div>
     ),
-    size
+    { ...size, headers: { "cache-control": "public, max-age=60" } }
   );
 }
