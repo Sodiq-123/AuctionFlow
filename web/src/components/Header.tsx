@@ -47,7 +47,7 @@ function SearchBox({ className = "" }: { className?: string }) {
 
 export function NetworkPill() {
   return (
-    <span className="hidden h-11 items-center gap-2 rounded-[14px] bg-white px-3.5 text-sm font-bold shadow-[inset_0_0_0_2px_var(--color-line)] lg:inline-flex">
+    <span className="hidden h-11 shrink-0 items-center gap-2 rounded-[14px] bg-white px-3.5 text-sm font-bold whitespace-nowrap shadow-[inset_0_0_0_2px_var(--color-line)] xl:inline-flex">
       <span className="inline-block h-4 w-4 rounded-[4px] bg-blue" />
       {chain.name}
     </span>
@@ -73,7 +73,7 @@ export function Header() {
             <LogoMark />
             <Wordmark className="hidden text-[26px] sm:inline" />
           </Link>
-          <nav className="hidden gap-6 font-bold md:flex" aria-label="Main">
+          <nav className="hidden gap-6 font-bold whitespace-nowrap md:flex" aria-label="Main">
             {NAV.map((item) => (
               <Link
                 key={item.href}
@@ -88,14 +88,14 @@ export function Header() {
         </div>
         <div className="flex flex-1 items-center justify-end gap-2.5">
           <Suspense>
-            <SearchBox className="hidden w-[300px] md:block" />
+            <SearchBox className="hidden min-w-0 flex-1 lg:block lg:max-w-[300px]" />
           </Suspense>
           <NetworkPill />
           <WalletButton />
         </div>
       </header>
       <Suspense>
-        <SearchBox className="px-4 pb-3 md:hidden" />
+        <SearchBox className="px-4 pb-3 sm:px-6 lg:hidden" />
       </Suspense>
     </>
   );

@@ -108,15 +108,29 @@ function Home() {
           {tab !== "trending" && (
             <label className="flex items-center gap-2 font-bold text-muted">
               Sort
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value as Sort)}
-                className="field h-11 w-auto pr-8 font-bold text-ink"
-              >
-                <option value="newest">Newest</option>
-                <option value="cap">Market cap</option>
-                <option value="progress">Closest to Uniswap</option>
-              </select>
+              <span className="relative">
+                <select
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as Sort)}
+                  className="field h-11 w-auto cursor-pointer appearance-none pr-11 font-bold text-ink"
+                >
+                  <option value="newest">Newest</option>
+                  <option value="cap">Market cap</option>
+                  <option value="progress">Closest to Uniswap</option>
+                </select>
+                <svg
+                  className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-muted"
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="3"
+                  aria-hidden="true"
+                >
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </span>
             </label>
           )}
         </section>

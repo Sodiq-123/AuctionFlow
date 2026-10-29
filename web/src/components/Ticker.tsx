@@ -11,7 +11,8 @@ type Item = { key: string; time: number; verb: string; color: string; what: stri
 export function Ticker() {
   const { data: auctions } = useAuctions();
   const { data: trades } = useRecentTrades();
-  if (!auctions || auctions.length === 0) return <div className="h-[34px] bg-ink" />;
+  // Nothing to show (no coins yet, or the indexer can't be reached): no strip at all.
+  if (!auctions || auctions.length === 0) return null;
 
   const byId = new Map(auctions.map((a) => [a.id, a]));
   const items: Item[] = [];

@@ -38,7 +38,7 @@ export function WalletButton() {
   if (!mounted || !isConnected || !address) {
     return (
       <>
-        <button onClick={() => setSignIn(true)} className="btn btn-blue h-11 px-5 [--edge:4px]">
+        <button onClick={() => setSignIn(true)} className="btn btn-blue h-11 shrink-0 px-5 whitespace-nowrap [--edge:4px]">
           Sign in
         </button>
         <SignInSheet open={signIn} onClose={() => setSignIn(false)} />
@@ -58,11 +58,11 @@ export function WalletButton() {
     <>
       <button
         onClick={() => setAccount(true)}
-        className="flex h-11 items-center gap-2 rounded-[14px] bg-white px-3 text-sm font-bold shadow-[inset_0_0_0_2px_var(--color-line)] hover:shadow-[inset_0_0_0_2px_#C9D6F5]"
+        className="flex h-11 shrink-0 items-center gap-2 rounded-[14px] bg-white px-3 text-sm font-bold whitespace-nowrap shadow-[inset_0_0_0_2px_var(--color-line)] hover:shadow-[inset_0_0_0_2px_#C9D6F5]"
       >
         <Avatar address={address} />
         <span>{shortAddress(address)}</span>
-        {eth !== undefined && <span className="hidden text-muted sm:inline">· {formatAmount(Number(formatEther(eth)))} ETH</span>}
+        {eth !== undefined && <span className="hidden text-muted xl:inline">· {formatAmount(Number(formatEther(eth)))} ETH</span>}
       </button>
       <AccountSheet open={account} onClose={() => setAccount(false)} />
     </>
