@@ -13,8 +13,8 @@ import { AuctionTokenAbi, UniswapV3PoolAbi } from "./abis/children";
  *   TOKEN_AUCTION_BASE_ADDRESS=0x...   (fill after mainnet deployment)
  *   TOKEN_AUCTION_BASE_START_BLOCK=... (fill after mainnet deployment)
  */
-const SEPOLIA_AUCTION = "0x424fdc89af63f3585716370901f7e7de3b11c3e8";
-const SEPOLIA_START_BLOCK = 54847711;
+const SEPOLIA_AUCTION = "0xad786651dcf1405bf636ce7dcdc9c8afbab420c2";
+const SEPOLIA_START_BLOCK = 54923635;
 const BASE_AUCTION = (process.env.TOKEN_AUCTION_BASE_ADDRESS ??
   "0x0000000000000000000000000000000000000000") as `0x${string}`;
 const BASE_START_BLOCK = Number(process.env.TOKEN_AUCTION_BASE_START_BLOCK ?? 0);

@@ -4,8 +4,8 @@ import { getAbiItem } from "viem";
 import { TokenAuctionAbi } from "./abis/TokenAuction";
 import { AuctionTokenAbi, UniswapV3PoolAbi } from "./abis/children";
 
-const TOKEN_AUCTION = "0x424fdc89af63f3585716370901f7e7de3b11c3e8";
-const START_BLOCK = 54847711;
+const TOKEN_AUCTION = "0xad786651dcf1405bf636ce7dcdc9c8afbab420c2";
+const START_BLOCK = 54923635;
 
 export default createConfig({
   chains: {
