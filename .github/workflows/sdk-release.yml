@@ -44,25 +44,24 @@ jobs:
       - name: Run tests
         run: pnpm --filter auctionflow-sdk test
 
-      # From the package's own directory, not with --filter: --filter runs
-      # pnpm's recursive publish, which has exited 0 without publishing
-      # (sdk-v3.0.0's and sdk-v3.1.0's first runs).
       - name: Publish to npm
         working-directory: sdk
         run: pnpm publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # Confirm the version actually reached the registry anyway.
+      # npm can take minutes to show a new version: sdk-v3.0.0's and
+      # sdk-v3.1.0's first runs published, then gave up after two minutes of
+      # not seeing it. Wait up to ten before calling it a failure.
       - name: Confirm the version is on npm
         run: |
           version=$(node -p "require('./sdk/package.json').version")
-          for attempt in $(seq 1 12); do
+          for attempt in $(seq 1 30); do
             if npm view "auctionflow-sdk@$version" version >/dev/null 2>&1; then
               echo "auctionflow-sdk@$version is on npm"
               exit 0
             fi
-            sleep 10
+            sleep 20
           done
           echo "::error::auctionflow-sdk@$version is not on npm after publishing"
           exit 1
