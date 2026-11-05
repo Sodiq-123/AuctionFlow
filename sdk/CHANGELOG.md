@@ -1,5 +1,20 @@
 # auctionflow-sdk
 
+## 3.1.0
+
+### Minor Changes
+
+- 896b65f: `AuctionBuilder` rejects a `basePrice` below 1,000,000 (`MIN_BASE_PRICE`, now
+  exported), matching the contract's new floor, and the docs describe the new
+  migration: it never pays the creator, and reverts if Uniswap refuses the
+  position.
+
+### Patch Changes
+
+- d86645d: Base Sepolia now points at `0xAD786651DcF1405bf636CE7dcDC9c8aFBab420c2`, the
+  deployment whose migration never pays out in place of the pool and can't be
+  pushed past the gas limit.
+
 ## 3.0.1
 
 ### Patch Changes
