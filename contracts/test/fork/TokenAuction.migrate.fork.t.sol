@@ -36,6 +36,43 @@ contract Swapper is IUniswapV3SwapCallback {
     }
 }
 
+interface IPositionWithdraw {
+    struct DecreaseLiquidityParams {
+        uint256 tokenId;
+        uint128 liquidity;
+        uint256 amount0Min;
+        uint256 amount1Min;
+        uint256 deadline;
+    }
+
+    function decreaseLiquidity(DecreaseLiquidityParams calldata params) external payable returns (uint256, uint256);
+}
+
+/// Real Uniswap pools, but every position is rejected, so migration has to
+/// take its fallback path after correcting the pool's price.
+contract RejectingPositionManager {
+    INonfungiblePositionManager immutable npm;
+
+    constructor(INonfungiblePositionManager npm_) {
+        npm = npm_;
+    }
+
+    function createAndInitializePoolIfNecessary(address token0, address token1, uint24 fee, uint160 sqrtPriceX96)
+        external
+        returns (address)
+    {
+        return npm.createAndInitializePoolIfNecessary(token0, token1, fee, sqrtPriceX96);
+    }
+
+    function mint(INonfungiblePositionManager.MintParams calldata)
+        external
+        pure
+        returns (uint256, uint128, uint256, uint256)
+    {
+        revert("position rejected");
+    }
+}
+
 /// Migration against real Uniswap v3 on a Base mainnet fork. Skipped when
 /// BASE_RPC_URL is not set (e.g. in CI).
 ///
@@ -119,6 +156,26 @@ abstract contract MigrateForkBase is Test {
         _fill(id);
     }
 
+    /// The standard launch preset on Base Sepolia, filled to its threshold.
+    function _launchCheap() internal returns (uint256 id) {
+        auction.setLaunchPreset(
+            TokenAuction.LaunchPreset({
+                paymentToken: address(usdc),
+                maxSupply: 1_000_000_000e18,
+                basePrice: 2e15,
+                slope: 4e7,
+                maxRaise: 10e6,
+                liquidityBps: 8_000
+            })
+        );
+        vm.prank(creator);
+        id = auction.launch("Cheap", "CHEAP", "ipfs://cheap", address(usdc));
+        vm.startPrank(buyer);
+        usdc.approve(address(auction), type(uint256).max);
+        auction.buyTokens(id, 1_000_000_000e18, type(uint256).max); // fills to the threshold
+        vm.stopPrank();
+    }
+
     function _tokenIsToken0(AuctionToken token) internal view returns (bool) {
         return address(token) < address(usdc);
     }
@@ -146,8 +203,11 @@ abstract contract MigrateForkBase is Test {
     /// The pool's price, as payment units per whole auction token × 1e18.
     function _poolPrice(address pool, AuctionToken token) internal view returns (uint256) {
         (uint160 sqrtP,,,,,,) = IUniswapV3Pool(pool).slot0();
-        uint256 sq = uint256(sqrtP) * sqrtP;
-        return _tokenIsToken0(token) ? Math.mulDiv(sq, 1e36, 1 << 192) : Math.mulDiv(1 << 192, 1e36, sq);
+        // In two steps: a cheap token paired as token1 has sqrtP above 2^128,
+        // so squaring it would overflow.
+        return _tokenIsToken0(token)
+            ? Math.mulDiv(Math.mulDiv(sqrtP, sqrtP, 1 << 96), 1e36, 1 << 96)
+            : Math.mulDiv(Math.mulDiv(1e36, 1 << 96, sqrtP), 1 << 96, sqrtP);
     }
 
     /// An attacker initialises the pool before migration, at `price`.
@@ -160,6 +220,100 @@ abstract contract MigrateForkBase is Test {
     function _floorTick(int24 tick) internal pure returns (int24) {
         int24 r = tick % 200;
         return r == 0 ? tick : (tick < 0 ? tick - r - 200 : tick - r);
+    }
+
+    function _ceilTick(int24 tick) internal pure returns (int24) {
+        int24 f = _floorTick(tick);
+        return f == tick ? f : f + 200;
+    }
+
+    /// Uniswap's tick for `sqrtP`, read from a scratch pool on another fee tier.
+    function _tickAt(AuctionToken token, uint160 sqrtP) internal returns (int24 tick) {
+        (address t0, address t1) = _sorted(token);
+        (, tick,,,,,) = IUniswapV3Pool(NPM.createAndInitializePoolIfNecessary(t0, t1, 3000, sqrtP)).slot0();
+    }
+
+    /// The attacker initialises the pool `premiumBps` above the auction's
+    /// final price and parks `amount` USDC between the two, the range
+    /// migration has to sell through to correct the price.
+    function _park(AuctionToken token, uint256 price, uint256 premiumBps, uint256 amount)
+        internal
+        returns (uint256 positionId, uint128 liquidity)
+    {
+        bool tokenIsToken0 = _tokenIsToken0(token);
+        (address t0, address t1) = _sorted(token);
+        int24 target = _tickAt(token, _sqrtPriceX96(price, tokenIsToken0));
+        address pool = _preInitialize(token, (price * (10_000 + premiumBps)) / 10_000);
+        (, int24 tick,,,,,) = IUniswapV3Pool(pool).slot0();
+        // USDC-only: the range must end at or below the current tick when
+        // the token is token0, and start strictly above it otherwise.
+        (int24 lower, int24 upper) =
+            tokenIsToken0 ? (_ceilTick(target), _floorTick(tick)) : (_floorTick(tick) + 200, _floorTick(target));
+
+        vm.startPrank(attacker);
+        usdc.approve(address(NPM), type(uint256).max);
+        (positionId, liquidity,,) = NPM.mint(
+            INonfungiblePositionManager.MintParams({
+                token0: t0,
+                token1: t1,
+                fee: FEE,
+                tickLower: lower,
+                tickUpper: upper,
+                amount0Desired: tokenIsToken0 ? 0 : amount,
+                amount1Desired: tokenIsToken0 ? amount : 0,
+                amount0Min: 0,
+                amount1Min: 0,
+                recipient: attacker,
+                deadline: block.timestamp
+            })
+        );
+        vm.stopPrank();
+    }
+
+    /// The attacker takes back what is left of the parked position, plus the
+    /// tokens migration sold into it.
+    function _unpark(uint256 positionId, uint128 liquidity) internal {
+        vm.startPrank(attacker);
+        IPositionWithdraw(address(NPM)).decreaseLiquidity(
+            IPositionWithdraw.DecreaseLiquidityParams(positionId, liquidity, 0, 0, block.timestamp)
+        );
+        NPM.collect(
+            INonfungiblePositionManager.CollectParams(positionId, attacker, type(uint128).max, type(uint128).max)
+        );
+        vm.stopPrank();
+    }
+
+    /// Sell every token `who` holds into the pool, for USDC.
+    function _sellAll(address who, AuctionToken token, address pool) internal {
+        uint256 amount = token.balanceOf(who);
+        if (amount == 0) return;
+        vm.prank(who);
+        token.transfer(address(swapper), amount);
+        uint256 before = usdc.balanceOf(address(swapper));
+        (address t0, address t1) = _sorted(token);
+        swapper.swap(IUniswapV3Pool(pool), t0, t1, _tokenIsToken0(token), amount);
+        uint256 received = usdc.balanceOf(address(swapper)) - before;
+        vm.prank(address(swapper));
+        usdc.transfer(who, received);
+    }
+
+    /// The USDC the creator, the attacker and the curve's only buyer hold
+    /// between them once each has sold every token into the pool and the
+    /// creator has taken their proceeds and their share of the pool fees.
+    function _cashOut(uint256 id, AuctionToken token) internal returns (uint256) {
+        address pool = auction.poolOf(id);
+        vm.startPrank(creator);
+        auction.withdrawProceeds(id);
+        if (auction.claimable(address(usdc), creator) > 0) auction.claim(usdc);
+        vm.stopPrank();
+        _sellAll(attacker, token, pool);
+        _sellAll(buyer, token, pool);
+        auction.collectFees(id);
+        if (auction.claimable(address(usdc), creator) > 0) {
+            vm.prank(creator);
+            auction.claim(usdc);
+        }
+        return usdc.balanceOf(creator) + usdc.balanceOf(attacker) + usdc.balanceOf(buyer);
     }
 
     // --- the happy path --------------------------------------------------------
@@ -207,23 +361,7 @@ abstract contract MigrateForkBase is Test {
     /// graduate at 10 USDC near 0.00000003 USDC each. That price once
     /// overflowed the pool price encoding whenever the token was token1.
     function test_migrate_cheapStandardLaunch() public {
-        auction.setLaunchPreset(
-            TokenAuction.LaunchPreset({
-                paymentToken: address(usdc),
-                maxSupply: 1_000_000_000e18,
-                basePrice: 2e15,
-                slope: 4e7,
-                maxRaise: 10e6,
-                liquidityBps: 8_000
-            })
-        );
-        vm.prank(creator);
-        uint256 id = auction.launch("Cheap", "CHEAP", "ipfs://cheap", address(usdc));
-        vm.startPrank(buyer);
-        usdc.approve(address(auction), type(uint256).max);
-        auction.buyTokens(id, 1_000_000_000e18, type(uint256).max); // fills to the threshold
-        vm.stopPrank();
-
+        uint256 id = _launchCheap();
         (TokenAuction.AuctionConfig memory cfg,,,) = auction.auctions(id);
         uint256 price = _spot(id);
         auction.migrate(id);
@@ -326,6 +464,73 @@ abstract contract MigrateForkBase is Test {
 
         assertTrue(auction.positionId(id) != 0, "migration completed");
         assertGe(_poolPrice(pool, token) * 1e6, price * (1e6 - 1), "never below the auction price");
+    }
+
+    /// A creator, or anyone working with them, parks USDC between the auction
+    /// price and a higher pool price, so migration sells part of its token
+    /// budget to them and opens the pool high. The sale's proceeds used to
+    /// be credited to the creator, which handed back about half the reserve
+    /// for free. Now they stay in the pool, and the whole party (creator,
+    /// attacker and the curve's only buyer, all selling out) never ends up
+    /// ahead of an honest migration.
+    function testFuzz_migrate_parkingLiquidityAboveAuctionPriceNeverPays(uint256 premiumBps, uint256 parked)
+        public
+    {
+        (uint256 id,) = _launch();
+        _assertParkingNeverPays(id, premiumBps, parked);
+    }
+
+    /// The same against the standard preset's billion cheap tokens.
+    function testFuzz_migrate_parkingNeverPaysOnStandardLaunch(uint256 premiumBps, uint256 parked) public {
+        _assertParkingNeverPays(_launchCheap(), premiumBps, parked);
+    }
+
+    function _assertParkingNeverPays(uint256 id, uint256 premiumBps, uint256 parked) internal {
+        premiumBps = bound(premiumBps, 500, 10_000_000); // 5% to 1,000x above
+        parked = bound(parked, 1e3, 1_000_000e6); // 0.001 to 1M USDC
+        uint256 price = _spot(id);
+        (TokenAuction.AuctionConfig memory cfg,, uint256 raised,) = auction.auctions(id);
+        AuctionToken token = cfg.token;
+        uint256 reserve = (raised * cfg.liquidityBps) / 10_000;
+
+        uint256 snapshot = vm.snapshotState();
+        auction.migrate(id);
+        uint256 honest = _cashOut(id, token);
+        vm.revertToState(snapshot);
+
+        (uint256 parkedId, uint128 parkedLiquidity) = _park(token, price, premiumBps, parked);
+        auction.migrate(id);
+        address pool = auction.poolOf(id);
+        assertTrue(pool != address(0) && auction.positionId(id) != 0, "migration completed");
+        assertGe(_poolPrice(pool, token) * 1e6, price * (1e6 - 1), "never below the auction price");
+        assertEq(auction.claimable(address(usdc), creator), 0, "the sale's proceeds are not the creator's");
+
+        _unpark(parkedId, parkedLiquidity);
+        assertGe(usdc.balanceOf(pool), reserve, "the whole reserve stays in the pool");
+        assertEq(token.balanceOf(address(auction)), 0, "leftover tokens burned");
+        assertLe(_cashOut(id, token), honest, "parking liquidity above the auction price never pays");
+    }
+
+    /// The same sale, then Uniswap rejects the position: the creator is
+    /// credited the reserve, as in any failed migration, but not the sale's
+    /// proceeds, which stay behind as sweepable excess.
+    function test_migrate_fallbackNeverCreditsTheSalesProceeds() public {
+        auction = new TokenAuction(
+            feeRecipient, 250, INonfungiblePositionManager(address(new RejectingPositionManager(NPM))), IWETH9(address(0))
+        );
+        auction.setPaymentTokenAllowed(address(usdc), true);
+        (uint256 id, AuctionToken token) = _launch();
+        (,, uint256 raised,) = auction.auctions(id);
+        uint256 reserve = (raised * LIQUIDITY_BPS) / 10_000;
+        _park(token, _spot(id), 500, 1_000e6);
+
+        auction.migrate(id);
+
+        assertEq(auction.positionId(id), 0, "no position");
+        assertEq(auction.claimable(address(usdc), creator), reserve, "only the reserve is credited");
+        assertGt(
+            usdc.balanceOf(address(auction)) - auction.custodied(address(usdc)), 0, "the sale's proceeds are excess"
+        );
     }
 
     // --- trading and fees ------------------------------------------------------

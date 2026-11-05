@@ -339,11 +339,20 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         _buy(auctionId, amount, msg.value, true);
     }
 
-    function _buy(uint256 auctionId, uint256 amount, uint256 maxCost, bool withETH) internal {
-        AuctionData storage auction = auctions[auctionId];
+    /// @dev The checks every curve trade starts with.
+    function _tradeable(uint256 auctionId, uint256 amount, bool withETH)
+        internal
+        view
+        returns (AuctionData storage auction)
+    {
+        auction = auctions[auctionId];
         require(auction.state == AuctionState.ACTIVE, "Auction not active");
         require(amount > 0, "Zero amount");
         require(!withETH || address(auction.config.paymentToken) == address(weth), "Not priced in ETH");
+    }
+
+    function _buy(uint256 auctionId, uint256 amount, uint256 maxCost, bool withETH) internal {
+        AuctionData storage auction = _tradeable(auctionId, amount, withETH);
 
         uint256 cost;
         bool filledUp;
@@ -431,27 +440,24 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     ///        `maxCost` on purchases, it protects against the price moving
     ///        between quote and transaction.
     function sellTokens(uint256 auctionId, uint256 amount, uint256 minProceeds) external nonReentrant {
-        (IERC20 payment, uint256 net) = _sell(auctionId, amount, minProceeds);
+        (IERC20 payment, uint256 net) = _sell(auctionId, amount, minProceeds, false);
         payment.safeTransfer(msg.sender, net);
     }
 
     /// @notice `sellTokens` for an auction priced in WETH, paid out in plain ETH.
     function sellTokensForETH(uint256 auctionId, uint256 amount, uint256 minProceeds) external nonReentrant {
-        (IERC20 payment, uint256 net) = _sell(auctionId, amount, minProceeds);
-        require(address(payment) == address(weth), "Not priced in ETH");
+        (, uint256 net) = _sell(auctionId, amount, minProceeds, true);
         weth.withdraw(net);
         _sendETH(msg.sender, net);
     }
 
     /// @dev Everything in a sell except paying the seller, which the caller
     ///      does with the returned payment token and amount.
-    function _sell(uint256 auctionId, uint256 amount, uint256 minProceeds)
+    function _sell(uint256 auctionId, uint256 amount, uint256 minProceeds, bool withETH)
         internal
         returns (IERC20 payment, uint256 net)
     {
-        AuctionData storage auction = auctions[auctionId];
-        require(auction.state == AuctionState.ACTIVE, "Auction not active");
-        require(amount > 0, "Zero amount");
+        AuctionData storage auction = _tradeable(auctionId, amount, withETH);
         // Tokens can't be transferred before migration, so what a holder bought
         // is exactly what they can sell.
         require(userPurchases[auctionId][msg.sender] >= amount, "Exceeds balance");
@@ -525,7 +531,8 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     ///         newly minted tokens, and keeps the position NFT forever. Never
     ///         leaves tokens permanently locked: if there is nothing to pair, or
     ///         Uniswap rejects the position, transfers are unlocked anyway and
-    ///         the reserved funds are credited to the creator to `claim`.
+    ///         the reserved funds are credited to the creator to `claim`. What
+    ///         the price correction received is never the creator's.
     function migrate(uint256 auctionId) external nonReentrant {
         AuctionData storage auction = auctions[auctionId];
         require(auction.state == AuctionState.COMPLETED, "Auction not completed");
@@ -549,19 +556,28 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
 
         m.token.enableTransfers();
 
+        bool sold;
+        bool placed;
         if (paymentBudget > 0 && tokenBudget > 0) {
             m.token.mint(address(this), tokenBudget);
             m.targetSqrtPrice = _sqrtPriceX96(price, m.tokenIsToken0);
             (address t0, address t1) = _sorted(m);
             m.pool = positionManager.createAndInitializePoolIfNecessary(t0, t1, POOL_FEE, m.targetSqrtPrice);
             _correctPoolPrice(m, tokenBudget, paymentBudget);
-            _addLiquidity(auctionId, m);
+            // Lowering a price that was too high sells tokens for payment.
+            sold = m.payment.balanceOf(address(this)) - m.paymentFloor > paymentBudget;
+            placed = _addLiquidity(auctionId, m, sold);
         }
 
-        // Anything Uniswap didn't take: burn tokens, credit funds to the creator.
+        // Anything Uniswap didn't take: burn the tokens, and credit the
+        // creator what's left of the reserve, never more. After a sale the
+        // proceeds went into the pool (see _addLiquidity) and nothing is
+        // credited: that would hand a creator who parked liquidity above the
+        // target about half the reserve. Anything left stays sweepable.
         uint256 tokensLeft = m.token.balanceOf(address(this));
         if (tokensLeft > 0) m.token.burn(tokensLeft);
-        uint256 paymentLeft = m.payment.balanceOf(address(this)) - m.paymentFloor;
+        uint256 paymentLeft = sold && placed ? 0 : m.payment.balanceOf(address(this)) - m.paymentFloor;
+        if (paymentLeft > paymentBudget) paymentLeft = paymentBudget;
         if (paymentLeft > 0) {
             claimable[address(m.payment)][auction.config.creator] += paymentLeft;
             custodied[address(m.payment)] += paymentLeft;
@@ -573,44 +589,70 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
 
     /// @dev Mint the full-range position. A failure here must not strand the
     ///      token, so it is caught and migration finishes without a pool.
-    function _addLiquidity(uint256 auctionId, Migration memory m) internal {
+    ///
+    ///      After a sale (`sold`), the payment held exceeds what the remaining
+    ///      tokens pair with at the pool's price, so the rest goes into a
+    ///      second, payment-only position from the current price down, also
+    ///      held forever. Together they hold every payment token, and for
+    ///      sellers they act as one full-range position of the combined
+    ///      liquidity. Its trading fees are not collected.
+    function _addLiquidity(uint256 auctionId, Migration memory m, bool sold) internal returns (bool placed) {
         uint256 tokenAvail = m.token.balanceOf(address(this));
         uint256 paymentAvail = m.payment.balanceOf(address(this)) - m.paymentFloor;
-        (address t0, address t1) = _sorted(m);
 
         IERC20(address(m.token)).forceApprove(address(positionManager), tokenAvail);
         m.payment.forceApprove(address(positionManager), paymentAvail);
 
-        // Minimums can be zero: _correctPoolPrice set the pool's price in this
-        // same transaction, so there is no window in which it can be moved.
+        (uint256 tokenId, uint256 usedToken, uint256 usedPayment) =
+            _mintPosition(m, MIN_USABLE_TICK, MAX_USABLE_TICK, tokenAvail, paymentAvail);
+        placed = tokenId != 0;
+        if (placed) {
+            positionId[auctionId] = tokenId;
+            poolOf[auctionId] = m.pool;
+        }
+        emit AuctionMigrated(auctionId, placed ? m.pool : address(0), tokenId, usedToken, usedPayment);
+
+        if (placed && sold) {
+            // Payment-only means the range lies wholly on the side the price
+            // moves to as the token is sold: below the current tick when the
+            // token is token0, above it otherwise.
+            (, int24 tick,,,,,) = IUniswapV3Pool(m.pool).slot0();
+            int24 edge = tick - tick % 200;
+            if (edge > tick) edge -= 200; // round down for negative ticks
+            (int24 lower, int24 upper) = m.tokenIsToken0 ? (MIN_USABLE_TICK, edge) : (edge + 200, MAX_USABLE_TICK);
+            _mintPosition(m, lower, upper, 0, paymentAvail - usedPayment);
+        }
+
+        IERC20(address(m.token)).forceApprove(address(positionManager), 0);
+        m.payment.forceApprove(address(positionManager), 0);
+    }
+
+    /// @dev Mint a position held here for good. Returns id 0 if Uniswap
+    ///      rejects it. Minimums can be zero: _correctPoolPrice set the pool's
+    ///      price in this same transaction, so there is no window in which it
+    ///      can be moved.
+    function _mintPosition(Migration memory m, int24 lower, int24 upper, uint256 tokens, uint256 payment)
+        internal
+        returns (uint256 tokenId, uint256 usedToken, uint256 usedPayment)
+    {
+        (address t0, address t1) = _sorted(m);
         try positionManager.mint(
             INonfungiblePositionManager.MintParams({
                 token0: t0,
                 token1: t1,
                 fee: POOL_FEE,
-                tickLower: MIN_USABLE_TICK,
-                tickUpper: MAX_USABLE_TICK,
-                amount0Desired: m.tokenIsToken0 ? tokenAvail : paymentAvail,
-                amount1Desired: m.tokenIsToken0 ? paymentAvail : tokenAvail,
+                tickLower: lower,
+                tickUpper: upper,
+                amount0Desired: m.tokenIsToken0 ? tokens : payment,
+                amount1Desired: m.tokenIsToken0 ? payment : tokens,
                 amount0Min: 0,
                 amount1Min: 0,
                 recipient: address(this),
                 deadline: block.timestamp
             })
-        ) returns (uint256 tokenId, uint128, uint256 used0, uint256 used1) {
-            positionId[auctionId] = tokenId;
-            poolOf[auctionId] = m.pool;
-            emit AuctionMigrated(
-                auctionId, m.pool, tokenId,
-                m.tokenIsToken0 ? used0 : used1,
-                m.tokenIsToken0 ? used1 : used0
-            );
-        } catch {
-            emit AuctionMigrated(auctionId, address(0), 0, 0, 0);
-        }
-
-        IERC20(address(m.token)).forceApprove(address(positionManager), 0);
-        m.payment.forceApprove(address(positionManager), 0);
+        ) returns (uint256 id, uint128, uint256 used0, uint256 used1) {
+            (tokenId, usedToken, usedPayment) = m.tokenIsToken0 ? (id, used0, used1) : (id, used1, used0);
+        } catch {}
     }
 
     /// @dev Anyone can initialize a Uniswap pool for a known token address, at
@@ -625,9 +667,11 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     ///
     ///      Lowering it means selling into someone's USDC-only position above
     ///      the target, at prices above the target, which only costs them. We
-    ///      sell at most half the reserve, so the position can always still be
-    ///      minted; if the price remains high, the pool simply opens above the
-    ///      auction price.
+    ///      sell at most half the token budget, so the position can always
+    ///      still be minted; if the price remains high, the pool simply opens
+    ///      above the auction price. The sale's proceeds stay in the pool
+    ///      (see _addLiquidity), so the seller can't profit from it, even
+    ///      when they are the creator.
     function _correctPoolPrice(Migration memory m, uint256 tokenBudget, uint256 paymentBudget) internal {
         IUniswapV3Pool pool = IUniswapV3Pool(m.pool);
         (uint160 current,,,,,,) = pool.slot0();
@@ -698,10 +742,8 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     /// @notice Withdraw everything credited to you in `token`.
     function claim(IERC20 token) external nonReentrant returns (uint256 amount) {
         amount = claimable[address(token)][msg.sender];
-        require(amount > 0, "Nothing to claim");
         claimable[address(token)][msg.sender] = 0;
-        custodied[address(token)] -= amount;
-        token.safeTransfer(msg.sender, amount);
+        _payOut(token, msg.sender, amount);
         emit Claimed(address(token), msg.sender, amount);
     }
 
@@ -709,11 +751,16 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     ///         recipient. Anyone may trigger it.
     function claimProtocolFees(IERC20 token) external nonReentrant returns (uint256 amount) {
         amount = protocolFees[address(token)];
-        require(amount > 0, "Nothing to claim");
         protocolFees[address(token)] = 0;
-        custodied[address(token)] -= amount;
-        token.safeTransfer(protocolFeeRecipient, amount);
+        _payOut(token, protocolFeeRecipient, amount);
         emit ProtocolFeesClaimed(address(token), protocolFeeRecipient, amount);
+    }
+
+    /// @dev Pay out a balance the caller has just zeroed.
+    function _payOut(IERC20 token, address to, uint256 amount) internal {
+        require(amount > 0, "Nothing to claim");
+        custodied[address(token)] -= amount;
+        token.safeTransfer(to, amount);
     }
 
     function _sendETH(address to, uint256 amount) internal {
