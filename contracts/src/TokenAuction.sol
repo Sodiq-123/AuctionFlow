@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./interfaces/IUniswapV3.sol";
 import "./interfaces/IWETH9.sol";
+import "./ReservePlacement.sol";
 
 contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3SwapCallback {
     using SafeERC20 for IERC20;
@@ -98,12 +99,10 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     mapping(address => uint256) public protocolFees;
 
     /// @notice Payouts credited to an account and not yet claimed, by token
-    ///         then account: a creator's share of pool fees, and any reserve
-    ///         that migration couldn't place in the pool.
+    ///         then account: a creator's share of pool fees.
     /// @dev    Credited rather than sent so that no recipient can block a
-    ///         trade or a migration. USDC can blacklist an address, and a
-    ///         transfer to a blacklisted creator would otherwise revert the
-    ///         migration and leave every holder's tokens locked.
+    ///         fee collection. USDC can blacklist an address, and a transfer
+    ///         to a blacklisted creator would otherwise revert it.
     mapping(address => mapping(address => uint256)) public claimable;
 
     /// @notice Payment tokens new auctions may be priced in. A token the
@@ -114,13 +113,26 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     // Uniswap v3
     /// @notice Pool fee tier for migrated liquidity: 1%, the usual tier for
     ///         newly launched, volatile tokens.
-    uint24 public constant POOL_FEE = 10000;
-    /// @dev Full-range bounds for the 1% tier (tick spacing 200), i.e.
-    ///      TickMath's MIN/MAX_TICK rounded inward to a multiple of 200.
-    int24 internal constant MIN_USABLE_TICK = -887200;
-    int24 internal constant MAX_USABLE_TICK = 887200;
+    uint24 public constant POOL_FEE = ReservePlacement.POOL_FEE;
     uint160 internal constant MIN_SQRT_RATIO = 4295128739;
     uint160 internal constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
+
+    /// @dev Bounds on a curve's pool liquidity, about reserve / sqrt(price)
+    ///      in raw units. Below the floor Uniswap could round a position down
+    ///      to nothing; the ceiling keeps it under a billionth of a tick's
+    ///      liquidity cap. A floor on the base price keeps every price a curve
+    ///      reaches, and the reserve's span, well inside Uniswap's tick range.
+    uint256 internal constant MIN_POOL_LIQUIDITY = 1e6;
+    uint256 internal constant MAX_POOL_LIQUIDITY = 1e25;
+    uint256 internal constant MIN_BASE_PRICE = 1e6;
+
+    /// @dev Migration mints tokens worth the payment reserve at the final
+    ///      price, plus 2% (`price` is WAD, hence SCALE). The reserve's range
+    ///      stops short of zero (see ReservePlacement.RESERVE_SPAN), so its
+    ///      position takes about 1% less payment per token than one at the
+    ///      exact value; the spare tokens make the payment run out first, so
+    ///      all of it goes into the pool. Tokens left over are burned.
+    uint256 internal constant RESERVE_TOKEN_SCALE = (BondingCurve.SCALE * 102) / 100;
 
     INonfungiblePositionManager public immutable positionManager;
 
@@ -289,7 +301,9 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
     ///      the token supply has room for both the sale and the Uniswap
     ///      liquidity minted at migration. The liquidity reserve is largest
     ///      when the auction sells out (raise / final price grows with every
-    ///      sale), so checking the sold-out case covers every outcome.
+    ///      sale), so checking the sold-out case covers every outcome. The
+    ///      pool's liquidity is checked at both ends of the price range a
+    ///      migration can happen at.
     function _validateCurve(
         uint256 maxSupply,
         uint256 basePrice,
@@ -297,7 +311,7 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         uint256 maxRaise,
         uint256 liquidityBps
     ) internal pure {
-        require(basePrice > 0, "Zero base price");
+        require(basePrice >= MIN_BASE_PRICE, "Base price too low");
         require(maxRaise > 0, "Zero max raise");
         require(
             liquidityBps >= MIN_LIQUIDITY_BPS && liquidityBps <= 10000,
@@ -312,10 +326,15 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
 
         uint256 soldOut = BondingCurve.maxBuyable(0, maxRaise, basePrice, slope, maxSupply);
         uint256 finalPrice = BondingCurve.spotPrice(soldOut, basePrice, slope);
-        uint256 reserve = Math.mulDiv(
-            (maxRaise * liquidityBps) / 10000, BondingCurve.SCALE, finalPrice, Math.Rounding.Ceil
-        );
+        uint256 paymentReserve = (maxRaise * liquidityBps) / 10000;
+        uint256 reserve = Math.mulDiv(paymentReserve, RESERVE_TOKEN_SCALE, finalPrice, Math.Rounding.Ceil);
         require(soldOut + reserve <= maxSupply, "Supply too small for liquidity");
+        // sqrt of a WAD price is sqrt(raw price) × 1e18.
+        require(
+            Math.mulDiv(paymentReserve, 1e18, Math.sqrt(finalPrice)) >= MIN_POOL_LIQUIDITY
+                && Math.mulDiv(paymentReserve, 1e18, Math.sqrt(basePrice)) <= MAX_POOL_LIQUIDITY,
+            "Pool liquidity out of range"
+        );
     }
 
     /// @notice Buy `amount` tokens (in token wei) from an auction that hasn't
@@ -513,37 +532,23 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
 
     // --- Migration ----------------------------------------------------------
 
-    /// @dev Working state for a migration, bundled to keep the stack shallow.
-    struct Migration {
-        AuctionToken token;
-        IERC20 payment;
-        bool tokenIsToken0;
-        uint160 targetSqrtPrice;
-        uint256 paymentFloor;   // payment tokens held for everything except this migration
-        address pool;
-    }
-
     /// @notice Move a completed auction's liquidity into Uniswap v3 and unlock
     ///         its token. Anyone may call it, so a creator can never hold the
     ///         token hostage by not migrating.
-    /// @dev    Opens (or corrects) the pool at the auction's final price, adds
-    ///         full-range liquidity from the reserved share of the raise plus
-    ///         newly minted tokens, and keeps the position NFT forever. Never
-    ///         leaves tokens permanently locked: if there is nothing to pair, or
-    ///         Uniswap rejects the position, transfers are unlocked anyway and
-    ///         the reserved funds are credited to the creator to `claim`. What
-    ///         the price correction received is never the creator's.
+    /// @dev    Opens (or raises) the pool at the auction's final price and
+    ///         adds the reserved share of the raise plus newly minted tokens,
+    ///         keeping the position NFT forever. If Uniswap refuses the
+    ///         position the whole migration reverts: nothing about it can be
+    ///         paid out instead, or refusing it would be worth forcing.
     function migrate(uint256 auctionId) external nonReentrant {
         AuctionData storage auction = auctions[auctionId];
         require(auction.state == AuctionState.COMPLETED, "Auction not completed");
 
         uint256 paymentBudget = _liquidityShare(auction);
         uint256 price = BondingCurve.spotPrice(auction.totalSold, auction.config.basePrice, auction.config.slope);
-        // Tokens worth the payment budget at the final price, so both sides of
-        // the pool are worth the same. `price` is WAD, hence SCALE.
-        uint256 tokenBudget = Math.mulDiv(paymentBudget, BondingCurve.SCALE, price);
+        uint256 tokenBudget = Math.mulDiv(paymentBudget, RESERVE_TOKEN_SCALE, price);
 
-        Migration memory m;
+        ReservePlacement.Migration memory m;
         m.token = auction.config.token;
         m.payment = auction.config.paymentToken;
         m.tokenIsToken0 = address(m.token) < address(m.payment);
@@ -552,147 +557,81 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
         auction.state = AuctionState.MIGRATED;
         custodied[address(m.payment)] -= paymentBudget;
 
-        m.paymentFloor = m.payment.balanceOf(address(this)) - paymentBudget;
-
         m.token.enableTransfers();
 
-        bool sold;
-        bool placed;
+        // _validateCurve leaves room for the reserve at the curve's own
+        // prices; rounding in the raise's favour can only shrink the room by
+        // dust, which this absorbs instead of failing the mint.
+        uint256 room = m.token.maxSupply() - m.token.totalSupply();
+        if (tokenBudget > room) tokenBudget = room;
+
         if (paymentBudget > 0 && tokenBudget > 0) {
             m.token.mint(address(this), tokenBudget);
             m.targetSqrtPrice = _sqrtPriceX96(price, m.tokenIsToken0);
-            (address t0, address t1) = _sorted(m);
+            (address t0, address t1) = ReservePlacement.sorted(m);
             m.pool = positionManager.createAndInitializePoolIfNecessary(t0, t1, POOL_FEE, m.targetSqrtPrice);
-            _correctPoolPrice(m, tokenBudget, paymentBudget);
-            // Lowering a price that was too high sells tokens for payment.
-            sold = m.payment.balanceOf(address(this)) - m.paymentFloor > paymentBudget;
-            placed = _addLiquidity(auctionId, m, sold);
+            _raisePoolPrice(m, paymentBudget);
+            _addLiquidity(auctionId, m, tokenBudget, paymentBudget);
+            // Tokens the position didn't take are burned. Payment dust it
+            // didn't take stays here, unowed and sweepable.
+            uint256 tokensLeft = m.token.balanceOf(address(this));
+            if (tokensLeft > 0) m.token.burn(tokensLeft);
         }
-
-        // Anything Uniswap didn't take: burn the tokens, and credit the
-        // creator what's left of the reserve, never more. After a sale the
-        // proceeds went into the pool (see _addLiquidity) and nothing is
-        // credited: that would hand a creator who parked liquidity above the
-        // target about half the reserve. Anything left stays sweepable.
-        uint256 tokensLeft = m.token.balanceOf(address(this));
-        if (tokensLeft > 0) m.token.burn(tokensLeft);
-        uint256 paymentLeft = sold && placed ? 0 : m.payment.balanceOf(address(this)) - m.paymentFloor;
-        if (paymentLeft > paymentBudget) paymentLeft = paymentBudget;
-        if (paymentLeft > 0) {
-            claimable[address(m.payment)][auction.config.creator] += paymentLeft;
-            custodied[address(m.payment)] += paymentLeft;
-        }
+        // Otherwise the reserve is worth less than one token wei, possible
+        // only on a curve no one could afford to buy from: with nothing to
+        // pair it with, it stays here unowed. Migration never pays anyone.
 
         // Nothing else will ever be minted or burned: fix the supply for good.
         m.token.renounceOwnership();
     }
 
-    /// @dev Mint the full-range position. A failure here must not strand the
-    ///      token, so it is caught and migration finishes without a pool.
-    ///
-    ///      After a sale (`sold`), the payment held exceeds what the remaining
-    ///      tokens pair with at the pool's price, so the rest goes into a
-    ///      second, payment-only position from the current price down, also
-    ///      held forever. Together they hold every payment token, and for
-    ///      sellers they act as one full-range position of the combined
-    ///      liquidity. Its trading fees are not collected.
-    function _addLiquidity(uint256 auctionId, Migration memory m, bool sold) internal returns (bool placed) {
-        uint256 tokenAvail = m.token.balanceOf(address(this));
-        uint256 paymentAvail = m.payment.balanceOf(address(this)) - m.paymentFloor;
-
-        IERC20(address(m.token)).forceApprove(address(positionManager), tokenAvail);
-        m.payment.forceApprove(address(positionManager), paymentAvail);
+    /// @dev Place the reserve (see ReservePlacement.place) and keep its
+    ///      position. If Uniswap refuses it, migration reverts.
+    function _addLiquidity(uint256 auctionId, ReservePlacement.Migration memory m, uint256 tokens, uint256 payment)
+        internal
+    {
+        IERC20(address(m.token)).forceApprove(address(positionManager), tokens);
+        m.payment.forceApprove(address(positionManager), payment);
 
         (uint256 tokenId, uint256 usedToken, uint256 usedPayment) =
-            _mintPosition(m, MIN_USABLE_TICK, MAX_USABLE_TICK, tokenAvail, paymentAvail);
-        placed = tokenId != 0;
-        if (placed) {
-            positionId[auctionId] = tokenId;
-            poolOf[auctionId] = m.pool;
-        }
-        emit AuctionMigrated(auctionId, placed ? m.pool : address(0), tokenId, usedToken, usedPayment);
-
-        if (placed && sold) {
-            // Payment-only means the range lies wholly on the side the price
-            // moves to as the token is sold: below the current tick when the
-            // token is token0, above it otherwise.
-            (, int24 tick,,,,,) = IUniswapV3Pool(m.pool).slot0();
-            int24 edge = tick - tick % 200;
-            if (edge > tick) edge -= 200; // round down for negative ticks
-            (int24 lower, int24 upper) = m.tokenIsToken0 ? (MIN_USABLE_TICK, edge) : (edge + 200, MAX_USABLE_TICK);
-            _mintPosition(m, lower, upper, 0, paymentAvail - usedPayment);
-        }
+            ReservePlacement.place(positionManager, m, tokens, payment);
+        require(tokenId != 0, "Liquidity not placed");
+        positionId[auctionId] = tokenId;
+        poolOf[auctionId] = m.pool;
+        emit AuctionMigrated(auctionId, m.pool, tokenId, usedToken, usedPayment);
 
         IERC20(address(m.token)).forceApprove(address(positionManager), 0);
         m.payment.forceApprove(address(positionManager), 0);
     }
 
-    /// @dev Mint a position held here for good. Returns id 0 if Uniswap
-    ///      rejects it. Minimums can be zero: _correctPoolPrice set the pool's
-    ///      price in this same transaction, so there is no window in which it
-    ///      can be moved.
-    function _mintPosition(Migration memory m, int24 lower, int24 upper, uint256 tokens, uint256 payment)
-        internal
-        returns (uint256 tokenId, uint256 usedToken, uint256 usedPayment)
-    {
-        (address t0, address t1) = _sorted(m);
-        try positionManager.mint(
-            INonfungiblePositionManager.MintParams({
-                token0: t0,
-                token1: t1,
-                fee: POOL_FEE,
-                tickLower: lower,
-                tickUpper: upper,
-                amount0Desired: m.tokenIsToken0 ? tokens : payment,
-                amount1Desired: m.tokenIsToken0 ? payment : tokens,
-                amount0Min: 0,
-                amount1Min: 0,
-                recipient: address(this),
-                deadline: block.timestamp
-            })
-        ) returns (uint256 id, uint128, uint256 used0, uint256 used1) {
-            (tokenId, usedToken, usedPayment) = m.tokenIsToken0 ? (id, used0, used1) : (id, used1, used0);
-        } catch {}
-    }
-
     /// @dev Anyone can initialize a Uniswap pool for a known token address, at
-    ///      any price, so the pool may already exist at the wrong price. Move
-    ///      it to the target before adding liquidity.
+    ///      any price. Below the auction price, raise it to the target:
+    ///      buying the token through ranges that can't hold any (no one can
+    ///      transfer it before migration) costs nothing and crosses no
+    ///      liquidity, so it can be neither blocked nor made expensive.
     ///
-    ///      Raising the token's price (buying it) is always free: tokens can't
-    ///      leave a holder before migration, so the pool cannot contain any,
-    ///      and a swap through empty ranges moves the price at no cost. That is
-    ///      the harmful case, since a pool below the auction price would sell
-    ///      the locked liquidity cheaply, so it is corrected exactly.
-    ///
-    ///      Lowering it means selling into someone's USDC-only position above
-    ///      the target, at prices above the target, which only costs them. We
-    ///      sell at most half the token budget, so the position can always
-    ///      still be minted; if the price remains high, the pool simply opens
-    ///      above the auction price. The sale's proceeds stay in the pool
-    ///      (see _addLiquidity), so the seller can't profit from it, even
-    ///      when they are the creator.
-    function _correctPoolPrice(Migration memory m, uint256 tokenBudget, uint256 paymentBudget) internal {
+    ///      Above it, the pool is left where it is and ReservePlacement places
+    ///      the reserve around it. Lowering it would mean selling into
+    ///      whatever someone parked above the target, which they can spread
+    ///      over enough ticks that the swap exceeds the block's gas.
+    function _raisePoolPrice(ReservePlacement.Migration memory m, uint256 paymentBudget) internal {
         IUniswapV3Pool pool = IUniswapV3Pool(m.pool);
         (uint160 current,,,,,,) = pool.slot0();
-        if (current == m.targetSqrtPrice) return;
-
         bool zeroForOne = current > m.targetSqrtPrice; // paying token0 lowers the price
-        bool sellsToken = zeroForOne == m.tokenIsToken0;
-        uint256 input = sellsToken ? tokenBudget / 2 : paymentBudget;
-        if (input == 0) return;
+        if (current == m.targetSqrtPrice || zeroForOne == m.tokenIsToken0) return;
 
-        (address t0, address t1) = _sorted(m);
+        (address t0, address t1) = ReservePlacement.sorted(m);
         _activePool = address(pool);
-        // `input` is at most the payment or token budget, both capped far below
-        // 2^255 by _validateCurve's bounds, so the cast can't wrap negative.
-        pool.swap(address(this), zeroForOne, int256(input), m.targetSqrtPrice, abi.encode(t0, t1));
+        // The budget is capped far below 2^255 by _validateCurve's bounds, so
+        // the cast can't wrap negative.
+        (int256 amount0, int256 amount1) =
+            pool.swap(address(this), zeroForOne, int256(paymentBudget), m.targetSqrtPrice, abi.encode(t0, t1));
         _activePool = address(0);
 
-        if (!sellsToken) {
-            (current,,,,,,) = pool.slot0();
-            require(current == m.targetSqrtPrice, "Pool price not corrected");
-        }
+        // Free, as argued above. Checked anyway: anything it took would come
+        // out of other auctions' funds when the reserve is added.
+        (current,,,,,,) = pool.slot0();
+        require(current == m.targetSqrtPrice && (zeroForOne ? amount0 : amount1) == 0, "Pool price not corrected");
     }
 
     /// @inheritdoc IUniswapV3SwapCallback
@@ -778,12 +717,6 @@ contract TokenAuction is ReentrancyGuard, Ownable2Step, Pausable, IUniswapV3Swap
 
     function _liquidityShare(AuctionData storage auction) internal view returns (uint256) {
         return (auction.totalRaised * auction.config.liquidityBps) / 10000;
-    }
-
-    function _sorted(Migration memory m) internal pure returns (address token0, address token1) {
-        return m.tokenIsToken0
-            ? (address(m.token), address(m.payment))
-            : (address(m.payment), address(m.token));
     }
 
     /// @dev Uniswap prices are token1 per token0 in raw units, as

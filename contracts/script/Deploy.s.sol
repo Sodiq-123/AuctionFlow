@@ -6,7 +6,8 @@ import "../src/TokenAuction.sol";
 /// Deploys TokenAuction and configures it in one broadcast: payment tokens,
 /// fees, the standard launch presets and, if NEW_OWNER is set, the start of
 /// the ownership handover. The new owner (a Safe) must then call
-/// `acceptOwnership`.
+/// `acceptOwnership`. Foundry first deploys the ReservePlacement library
+/// (CREATE2) and links TokenAuction to it.
 ///
 /// Env: PRIVATE_KEY, FEE_RECIPIENT; optional DEFAULT_FEE_BPS (default 100),
 /// LP_FEE_SHARE_BPS (default 2000), NEW_OWNER.

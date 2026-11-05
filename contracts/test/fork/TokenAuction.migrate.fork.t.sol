@@ -297,6 +297,19 @@ abstract contract MigrateForkBase is Test {
         usdc.transfer(who, received);
     }
 
+    /// The USDC the buyer gets for selling `amount` tokens into the pool.
+    function _sellInto(address pool, AuctionToken token, uint256 amount) internal returns (uint256) {
+        uint256 before = usdc.balanceOf(buyer);
+        address other = makeAddr("other");
+        vm.prank(buyer);
+        token.transfer(other, amount);
+        _sellAll(other, token, pool);
+        uint256 got = usdc.balanceOf(other);
+        vm.prank(other);
+        usdc.transfer(buyer, got);
+        return usdc.balanceOf(buyer) - before;
+    }
+
     /// The USDC the creator, the attacker and the curve's only buyer hold
     /// between them once each has sold every token into the pool and the
     /// creator has taken their proceeds and their share of the pool fees.
@@ -339,11 +352,13 @@ abstract contract MigrateForkBase is Test {
         (uint160 sqrtP,,,,,,) = IUniswapV3Pool(pool).slot0();
         assertEq(sqrtP, _sqrtPriceX96(price, _tokenIsToken0(token)), "pool opens at the auction's final price");
 
-        // The pool holds the liquidity share; Uniswap's rounding dust is credited to the creator.
+        // The pool holds the whole liquidity share, bar Uniswap's rounding
+        // dust, which stays in the contract unowed. The creator gets nothing.
         uint256 poolUsdc = usdc.balanceOf(pool);
-        uint256 dust = auction.claimable(address(usdc), creator);
         assertLe(poolUsdc, liquidityShare);
-        assertEq(poolUsdc + dust, liquidityShare, "dust credited to creator");
+        assertApproxEqAbs(poolUsdc, liquidityShare, 2, "the whole reserve is in the pool");
+        uint256 dust = liquidityShare - poolUsdc;
+        assertEq(auction.claimable(address(usdc), creator), 0, "nothing credited to the creator");
 
         // Unused tokens were burned, the supply is fixed, and the token is tradeable.
         assertEq(token.balanceOf(address(auction)), 0, "leftover tokens burned");
@@ -352,9 +367,9 @@ abstract contract MigrateForkBase is Test {
         vm.prank(buyer);
         token.transfer(attacker, 1e18);
 
-        // The creator's share, the dust and the protocol's fees stay custodied until withdrawn.
+        // The creator's share and the protocol's fees stay custodied until withdrawn.
         assertEq(usdc.balanceOf(address(auction)), raised - liquidityShare + dust + fees);
-        assertEq(auction.custodied(address(usdc)), raised - liquidityShare + dust + fees);
+        assertEq(auction.custodied(address(usdc)), raised - liquidityShare + fees);
     }
 
     /// The standard launch preset on Base Sepolia: a billion tokens that
@@ -384,13 +399,9 @@ abstract contract MigrateForkBase is Test {
         assertEq(usdc.balanceOf(creator), creatorShare);
 
         auction.migrate(id);
-        uint256 dust = auction.claimable(address(usdc), creator);
-        if (dust > 0) {
-            vm.prank(creator);
-            auction.claim(usdc);
-        }
+        assertEq(auction.claimable(address(usdc), creator), 0, "migration pays the creator nothing");
         auction.claimProtocolFees(usdc);
-        assertEq(usdc.balanceOf(address(auction)), 0, "everything paid out or in the pool");
+        assertLe(usdc.balanceOf(address(auction)), 2, "everything paid out or in the pool, bar rounding dust");
         assertEq(auction.custodied(address(usdc)), 0);
     }
 
@@ -412,16 +423,28 @@ abstract contract MigrateForkBase is Test {
         assertTrue(auction.positionId(id) != 0);
     }
 
-    function test_migrate_correctsEmptyPoolInitializedTooHigh() public {
+    /// A pool opened too high is left there: lowering it would mean selling
+    /// into whatever someone parked above the target. The reserve's payment
+    /// goes in at or below the auction price instead, so a holder selling
+    /// gets no more than it, and its tokens above the pool's price.
+    function test_migrate_poolOpenedTooHighKeepsReserveAtAuctionPrice() public {
         (uint256 id, AuctionToken token) = _create();
         address pool = _preInitialize(token, BASE_PRICE * 1_000);
+        (uint160 opened,,,,,,) = IUniswapV3Pool(pool).slot0();
         _fill(id);
         uint256 price = _spot(id);
+        (,, uint256 raised,) = auction.auctions(id);
 
         auction.migrate(id);
 
         (uint160 sqrtP,,,,,,) = IUniswapV3Pool(pool).slot0();
-        assertEq(sqrtP, _sqrtPriceX96(price, _tokenIsToken0(token)), "empty range: corrected exactly");
+        assertEq(sqrtP, opened, "the pool's price is left alone");
+        assertApproxEqAbs(usdc.balanceOf(pool), (raised * LIQUIDITY_BPS) / 10_000, 2, "the whole reserve is in");
+        // Within 4%: the pool's 1% fee, the reserve's edge (up to 2% below the
+        // price, past the tick estimate's error) and the trade's own impact.
+        uint256 got = _sellInto(pool, token, 1e18);
+        assertLe(got, price / 1e18, "a seller gets no more than the auction price");
+        assertGe(got, (price * 96) / 100 / 1e18, "and close to it");
     }
 
     /// An attacker prices the pool high and parks USDC liquidity between that
@@ -467,12 +490,11 @@ abstract contract MigrateForkBase is Test {
     }
 
     /// A creator, or anyone working with them, parks USDC between the auction
-    /// price and a higher pool price, so migration sells part of its token
-    /// budget to them and opens the pool high. The sale's proceeds used to
-    /// be credited to the creator, which handed back about half the reserve
-    /// for free. Now they stay in the pool, and the whole party (creator,
-    /// attacker and the curve's only buyer, all selling out) never ends up
-    /// ahead of an honest migration.
+    /// price and a higher pool price. Migration once sold part of its token
+    /// budget into it and credited the proceeds to the creator, handing back
+    /// about half the reserve for free. Now nothing is sold, and the whole
+    /// party (creator, attacker and the curve's only buyer, all selling out)
+    /// never ends up ahead of an honest migration.
     function testFuzz_migrate_parkingLiquidityAboveAuctionPriceNeverPays(uint256 premiumBps, uint256 parked)
         public
     {
@@ -503,34 +525,28 @@ abstract contract MigrateForkBase is Test {
         address pool = auction.poolOf(id);
         assertTrue(pool != address(0) && auction.positionId(id) != 0, "migration completed");
         assertGe(_poolPrice(pool, token) * 1e6, price * (1e6 - 1), "never below the auction price");
-        assertEq(auction.claimable(address(usdc), creator), 0, "the sale's proceeds are not the creator's");
+        assertEq(auction.claimable(address(usdc), creator), 0, "migration pays the creator nothing");
 
         _unpark(parkedId, parkedLiquidity);
-        assertGe(usdc.balanceOf(pool), reserve, "the whole reserve stays in the pool");
+        assertGe(usdc.balanceOf(pool) + 2, reserve, "the whole reserve stays in the pool");
         assertEq(token.balanceOf(address(auction)), 0, "leftover tokens burned");
         assertLe(_cashOut(id, token), honest, "parking liquidity above the auction price never pays");
     }
 
-    /// The same sale, then Uniswap rejects the position: the creator is
-    /// credited the reserve, as in any failed migration, but not the sale's
-    /// proceeds, which stay behind as sweepable excess.
-    function test_migrate_fallbackNeverCreditsTheSalesProceeds() public {
+    /// If Uniswap refuses the position, migration reverts: the reserve is
+    /// never paid out instead, so forcing a refusal is worth nothing.
+    function test_migrate_revertsWhenUniswapRefuses() public {
         auction = new TokenAuction(
             feeRecipient, 250, INonfungiblePositionManager(address(new RejectingPositionManager(NPM))), IWETH9(address(0))
         );
         auction.setPaymentTokenAllowed(address(usdc), true);
         (uint256 id, AuctionToken token) = _launch();
-        (,, uint256 raised,) = auction.auctions(id);
-        uint256 reserve = (raised * LIQUIDITY_BPS) / 10_000;
         _park(token, _spot(id), 500, 1_000e6);
 
+        vm.expectRevert("Liquidity not placed");
         auction.migrate(id);
-
-        assertEq(auction.positionId(id), 0, "no position");
-        assertEq(auction.claimable(address(usdc), creator), reserve, "only the reserve is credited");
-        assertGt(
-            usdc.balanceOf(address(auction)) - auction.custodied(address(usdc)), 0, "the sale's proceeds are excess"
-        );
+        (, TokenAuction.AuctionState state,,) = auction.auctions(id);
+        assertEq(uint256(state), uint256(TokenAuction.AuctionState.COMPLETED), "still waiting to migrate");
     }
 
     // --- trading and fees ------------------------------------------------------
@@ -560,7 +576,7 @@ abstract contract MigrateForkBase is Test {
         assertEq(auction.claimable(address(usdc), creator) - creatorUsdc, paymentFees - protocolShare, "creator share");
         assertEq(auction.protocolFees(address(token)), protocolTokens);
         assertEq(auction.claimable(address(token), creator), tokenFees - protocolTokens);
-        assertEq(usdc.balanceOf(address(auction)), auction.custodied(address(usdc)), "custody untouched");
+        assertLe(usdc.balanceOf(address(auction)) - auction.custodied(address(usdc)), 2, "custody untouched");
         assertEq(token.balanceOf(address(auction)), auction.custodied(address(token)), "token fees custodied");
 
         // Both sides claim their share of both tokens.

@@ -3,42 +3,11 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "../../src/TokenAuction.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "../mocks/MockUniswap.sol";
 
 contract MockUSDC is ERC20 {
     constructor() ERC20("Mock USDC", "mUSDC") {
         _mint(msg.sender, 1_000_000_000 * 1e6);
-    }
-}
-
-/// A pool that reports whatever price it was initialised with.
-contract MockPool {
-    uint160 public sqrtPriceX96;
-
-    constructor(uint160 price) {
-        sqrtPriceX96 = price;
-    }
-
-    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
-        return (sqrtPriceX96, 0, 0, 0, 0, 0, true);
-    }
-}
-
-/// Creates pools normally but rejects every position, so migration has to
-/// take its fallback path.
-contract RejectingPositionManager {
-    function createAndInitializePoolIfNecessary(address, address, uint24, uint160 sqrtPriceX96)
-        external
-        returns (address)
-    {
-        return address(new MockPool(sqrtPriceX96));
-    }
-
-    function mint(INonfungiblePositionManager.MintParams calldata)
-        external
-        pure
-        returns (uint256, uint128, uint256, uint256)
-    {
-        revert("position rejected");
     }
 }
 
@@ -57,7 +26,7 @@ contract TokenAuctionMigrateTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(
-            makeAddr("feeRecipient"), 250, INonfungiblePositionManager(address(new RejectingPositionManager()))
+            makeAddr("feeRecipient"), 250, INonfungiblePositionManager(address(new AcceptingPositionManager()))
         , IWETH9(address(0)));
         auction.setPaymentTokenAllowed(address(usdc), true);
         usdc.transfer(buyer, 1_000e6);
@@ -98,19 +67,17 @@ contract TokenAuctionMigrateTest is Test {
         auction.migrate(id);
     }
 
-    /// If Uniswap rejects the position, migration still completes: the token
-    /// unlocks, its supply is fixed, unused tokens are burned and the reserved
-    /// funds are credited to the creator. Buyers are never left holding
-    /// locked tokens.
-    function test_migrate_neverStrandsTokensWhenUniswapRejects() public {
+    /// Migration completes for any caller: the token unlocks, its supply is
+    /// fixed, the whole reserve goes into the pool, spare tokens are burned
+    /// and nothing is credited to the creator.
+    function test_migrate_placesTheWholeReserve() public {
         uint256 id = _createAuction();
         _graduate(id);
         AuctionToken token = _token(id);
         uint256 sold = token.totalSupply();
         uint256 liquidityShare = (MAX_RAISE * 5_000) / 10_000;
+        uint256 fees = auction.protocolFees(address(usdc));
 
-        vm.expectEmit(true, false, false, true);
-        emit TokenAuction.AuctionMigrated(id, address(0), 0, 0, 0);
         vm.prank(stranger); // permissionless
         auction.migrate(id);
 
@@ -118,22 +85,37 @@ contract TokenAuctionMigrateTest is Test {
         assertEq(uint256(state), uint256(TokenAuction.AuctionState.MIGRATED));
         assertTrue(token.transfersEnabled(), "token unlocked");
         assertEq(token.owner(), address(0), "ownership renounced: supply fixed for good");
-        assertEq(token.totalSupply(), sold, "liquidity tokens minted then burned");
-        assertEq(auction.positionId(id), 0, "no position");
-        assertEq(auction.claimable(address(usdc), creator), liquidityShare, "reserved funds credited to the creator");
-        uint256 fees = auction.protocolFees(address(usdc));
-        assertEq(auction.custodied(address(usdc)), MAX_RAISE + fees, "creator's share, the credit and fees still owed");
-
-        vm.expectEmit(true, true, false, true);
-        emit TokenAuction.Claimed(address(usdc), creator, liquidityShare);
-        vm.prank(creator);
-        auction.claim(usdc);
-        assertEq(usdc.balanceOf(creator), liquidityShare, "creator claimed the reserve");
-        assertEq(auction.claimable(address(usdc), creator), 0);
-        assertEq(auction.custodied(address(usdc)), MAX_RAISE - liquidityShare + fees);
+        assertEq(auction.positionId(id), 1, "position kept");
+        assertEq(usdc.balanceOf(address(auction.positionManager())), liquidityShare, "the reserve is in the pool");
+        assertEq(auction.claimable(address(usdc), creator), 0, "nothing credited to the creator");
+        assertEq(auction.custodied(address(usdc)), MAX_RAISE - liquidityShare + fees, "creator's share and fees still owed");
+        assertEq(usdc.balanceOf(address(auction)), MAX_RAISE - liquidityShare + fees, "the whole reserve left");
+        assertEq(token.balanceOf(address(auction)), 0, "spare tokens burned");
+        assertGt(token.totalSupply(), sold, "reserve tokens minted");
 
         vm.prank(buyer);
         token.transfer(stranger, 1e18); // tradeable
+    }
+
+    /// If Uniswap refuses the position, nothing happens: the reserve is never
+    /// paid out instead, so refusing it is worth nothing to anyone.
+    function test_migrate_revertsWhenUniswapRefuses() public {
+        TokenAuction refused = new TokenAuction(
+            makeAddr("feeRecipient"), 250, INonfungiblePositionManager(address(new RefusingPositionManager())),
+            IWETH9(address(0))
+        );
+        auction = refused;
+        auction.setPaymentTokenAllowed(address(usdc), true);
+        uint256 id = _createAuction();
+        _graduate(id);
+
+        vm.expectRevert("Liquidity not placed");
+        auction.migrate(id);
+
+        (, TokenAuction.AuctionState state,,) = auction.auctions(id);
+        assertEq(uint256(state), uint256(TokenAuction.AuctionState.COMPLETED), "still waiting to migrate");
+        assertFalse(_token(id).transfersEnabled(), "still locked");
+        assertEq(auction.claimable(address(usdc), creator), 0, "nothing credited");
     }
 
     function test_migrate_onlyOnce() public {

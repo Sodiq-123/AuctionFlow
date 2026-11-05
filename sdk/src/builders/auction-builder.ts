@@ -1,6 +1,6 @@
 import { Address } from "viem";
 import { AuctionConfig } from "../types";
-import { DEFAULT_LIQUIDITY_BPS, MIN_LIQUIDITY_BPS } from "../constants/protocol";
+import { DEFAULT_LIQUIDITY_BPS, MIN_BASE_PRICE, MIN_LIQUIDITY_BPS } from "../constants/protocol";
 
 export class AuctionBuilder {
   private config: Partial<AuctionConfig> = {};
@@ -61,7 +61,7 @@ export class AuctionBuilder {
     const config = { liquidityBps: BigInt(DEFAULT_LIQUIDITY_BPS), ...this.config } as AuctionConfig;
 
     if (config.maxSupply <= 0n) throw new Error("maxSupply must be greater than 0");
-    if (config.basePrice <= 0n) throw new Error("basePrice must be greater than 0");
+    if (config.basePrice < MIN_BASE_PRICE) throw new Error(`basePrice must be at least ${MIN_BASE_PRICE}`);
     if (config.slope < 0n) throw new Error("slope must not be negative");
     if (config.maxRaise <= 0n) throw new Error("maxRaise must be greater than 0");
     const liquidityBps = config.liquidityBps!;

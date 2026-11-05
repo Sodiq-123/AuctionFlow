@@ -49,10 +49,11 @@ describe("AuctionBuilder", () => {
     expect(() => validBuilder().withLiquidity(12.5)).toThrow(/integer/);
   });
 
-  it("rejects a non-positive basePrice", () => {
-    expect(() => validBuilder().withBondingCurve(0n, 1_000n * 10n ** 18n).build()).toThrow(
-      /basePrice must be greater than 0/
+  it("rejects a basePrice below the contract's floor", () => {
+    expect(() => validBuilder().withBondingCurve(999_999n, 1_000n * 10n ** 18n).build()).toThrow(
+      /basePrice must be at least 1000000/
     );
+    expect(() => validBuilder().withBondingCurve(1_000_000n, 1_000n * 10n ** 18n).build()).not.toThrow();
   });
 });
 

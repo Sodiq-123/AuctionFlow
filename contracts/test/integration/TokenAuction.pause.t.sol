@@ -3,42 +3,11 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "../../src/TokenAuction.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "../mocks/MockUniswap.sol";
 
 contract MockUSDC is ERC20 {
     constructor() ERC20("Mock USDC", "mUSDC") {
         _mint(msg.sender, 1_000_000_000 * 1e6);
-    }
-}
-
-/// Lets migration run without Uniswap: pool creation succeeds and the
-/// position is rejected, so migrate() takes its fallback path.
-contract NoPoolPositionManager {
-    function createAndInitializePoolIfNecessary(address, address, uint24, uint160 sqrtPriceX96)
-        external
-        returns (address)
-    {
-        return address(new NoPool(sqrtPriceX96));
-    }
-
-    function mint(INonfungiblePositionManager.MintParams calldata)
-        external
-        pure
-        returns (uint256, uint128, uint256, uint256)
-    {
-        revert("position rejected");
-    }
-}
-
-/// A pool that reports whatever price it was initialised with.
-contract NoPool {
-    uint160 public sqrtPriceX96;
-
-    constructor(uint160 price) {
-        sqrtPriceX96 = price;
-    }
-
-    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
-        return (sqrtPriceX96, 0, 0, 0, 0, 0, true);
     }
 }
 
@@ -56,7 +25,7 @@ contract TokenAuctionPauseTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         auction = new TokenAuction(
-            makeAddr("feeRecipient"), 250, INonfungiblePositionManager(address(new NoPoolPositionManager()))
+            makeAddr("feeRecipient"), 250, INonfungiblePositionManager(address(new AcceptingPositionManager()))
         , IWETH9(address(0)));
         auction.setPaymentTokenAllowed(address(usdc), true);
         auction.setLaunchPreset(

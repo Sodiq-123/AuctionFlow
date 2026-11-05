@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "../../src/TokenAuction.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "../mocks/MockUniswap.sol";
 
 /// Behaves like USDC's blacklist: transfers to or from a blacklisted address
 /// revert.
@@ -27,37 +28,6 @@ contract BlacklistableUSDC is ERC20 {
     }
 }
 
-/// Creates pools but rejects every position, so migration returns the whole
-/// reserve to the creator: the path where a payout to the creator is certain.
-contract RejectingPositionManager {
-    function createAndInitializePoolIfNecessary(address, address, uint24, uint160 sqrtPriceX96)
-        external
-        returns (address)
-    {
-        return address(new FixedPricePool(sqrtPriceX96));
-    }
-
-    function mint(INonfungiblePositionManager.MintParams calldata)
-        external
-        pure
-        returns (uint256, uint128, uint256, uint256)
-    {
-        revert("position rejected");
-    }
-}
-
-contract FixedPricePool {
-    uint160 public sqrtPriceX96;
-
-    constructor(uint160 price) {
-        sqrtPriceX96 = price;
-    }
-
-    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
-        return (sqrtPriceX96, 0, 0, 0, 0, 0, true);
-    }
-}
-
 /// A blacklisted fee recipient or creator can only block its own claim, never
 /// a holder's exit or a token's migration.
 contract TokenAuctionBlacklistTest is Test {
@@ -71,7 +41,7 @@ contract TokenAuctionBlacklistTest is Test {
     function setUp() public {
         usdc = new BlacklistableUSDC();
         auction = new TokenAuction(
-            feeRecipient, 100, INonfungiblePositionManager(address(new RejectingPositionManager()))
+            feeRecipient, 100, INonfungiblePositionManager(address(new AcceptingPositionManager()))
         , IWETH9(address(0)));
         auction.setPaymentTokenAllowed(address(usdc), true);
         auction.setLaunchPreset(
@@ -126,10 +96,11 @@ contract TokenAuctionBlacklistTest is Test {
         assertEq(uint256(state), uint256(TokenAuction.AuctionState.MIGRATED));
         (TokenAuction.AuctionConfig memory cfg,,,) = auction.auctions(id);
         assertTrue(cfg.token.transfersEnabled(), "holders' tokens unlocked");
-        assertEq(auction.claimable(address(usdc), creator), 8e6, "reserve credited, not sent");
+        assertEq(auction.claimable(address(usdc), creator), 0, "migration pays the creator nothing");
 
+        // Only the creator's own withdrawal is blocked.
         vm.prank(creator);
         vm.expectRevert("Blacklisted");
-        auction.claim(usdc);
+        auction.withdrawProceeds(id);
     }
 }

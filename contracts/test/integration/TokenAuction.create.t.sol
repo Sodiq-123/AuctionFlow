@@ -176,10 +176,31 @@ contract TokenAuctionCreateTest is Test {
         auction.createAuction(p);
     }
 
-    function test_createAuction_rejectsZeroBasePrice() public {
+    function test_createAuction_rejectsBasePriceBelowFloor() public {
         TokenAuction.AuctionParams memory p = _params();
-        p.basePrice = 0;
-        _expectCreateRevert(p, "Zero base price");
+        p.basePrice = 1e6 - 1;
+        _expectCreateRevert(p, "Base price too low");
+    }
+
+    /// Liquidity so deep that it nears a tick's cap: 100 ETH-sized raise of a
+    /// token at 1e-14 payment units per token wei.
+    function test_createAuction_rejectsPoolLiquidityTooHigh() public {
+        TokenAuction.AuctionParams memory p = _params();
+        p.maxSupply = 1e35;
+        p.basePrice = 1e22;
+        p.slope = 0;
+        p.maxRaise = 1e20;
+        _expectCreateRevert(p, "Pool liquidity out of range");
+    }
+
+    /// Liquidity so thin Uniswap could round the position to nothing: a raise
+    /// of 2 units at 100 USDC per token.
+    function test_createAuction_rejectsPoolLiquidityTooLow() public {
+        TokenAuction.AuctionParams memory p = _params();
+        p.basePrice = 1e26;
+        p.slope = 0;
+        p.maxRaise = 2;
+        _expectCreateRevert(p, "Pool liquidity out of range");
     }
 
     function test_createAuction_rejectsZeroMaxRaise() public {

@@ -217,10 +217,12 @@ await sdk.claim(tokenAddress);
 **Migration** pairs the auction's liquidity share of the raise with newly
 minted tokens and opens a 1% Uniswap v3 pool **at the auction's final price**,
 so there is no price jump to arbitrage. If someone initialised the pool
-beforehand at a different price, migration corrects it first. The position NFT
-stays in the auction contract forever, so the liquidity can never be pulled.
-Tokens Uniswap doesn't use are burned, and leftover funds are credited to the
-creator to `claim`.
+beforehand below that price, migration raises it first; if above, the reserve's
+funds go in at or below the final price and its tokens above the pool's price,
+so neither can be traded against at a better price than the auction's. The
+position NFT stays in the auction contract forever, so the liquidity can never
+be pulled. Tokens Uniswap doesn't use are burned. Migration never pays the
+creator: if Uniswap refuses the position, it reverts and can be retried.
 
 **Withdrawal** pays the creator everything not reserved for liquidity: with the
 default 50% share, half the raise. It works before or after migration.
@@ -277,7 +279,7 @@ Early buyers pay less; later buyers pay more.
 | `getMigration(auctionId)` | The pool address and position NFT id, or `null` before migration. |
 | `withdrawProceeds(auctionId)` | Pay the creator their share of the raise (what isn't reserved for liquidity). Creator-only, once. |
 | `collectFees(auctionId)` | Collect the pool's trading fees: the protocol's share accrues to the protocol and the rest is credited to the creator. Anyone may call. |
-| `claim(token)` | Withdraw everything credited to the connected account in `token`: a creator's share of pool fees, and any reserve migration couldn't place. |
+| `claim(token)` | Withdraw everything credited to the connected account in `token`: a creator's share of pool fees. |
 | `getClaimable(token, account)` | How much of `token` is credited to `account`. |
 | `claimProtocolFees(token)` | Send the protocol's unclaimed fees in `token` to the fee recipient. Anyone may call. |
 | `getProtocolFees(token)` | The protocol's unclaimed fees in `token`. |

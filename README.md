@@ -170,6 +170,7 @@ contracts/src/
 ├── AuctionToken.sol             ERC-20 with capped minting and a transfer lock until migration
 ├── BondingCurve.sol             Pure math library (integral of linear curve, rounded up)
 ├── TokenAuction.sol             Main auction contract: sale, migration, payouts
+├── ReservePlacement.sol         Library: where migration places the reserve in the pool
 ├── interfaces/IUniswapV3.sol    The Uniswap v3 calls migration needs
 └── interfaces/IWETH9.sol        Wrapped ether, for paying in ETH
 ```

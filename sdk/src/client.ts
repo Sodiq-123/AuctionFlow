@@ -316,7 +316,7 @@ export class AuctionFlowSDK {
 
   /**
    * Withdraw everything credited to the connected account in `token`: a
-   * creator's share of pool fees, and any reserve migration couldn't place.
+   * creator's share of pool fees.
    */
   async claim(token: Address): Promise<Hash> {
     return this.write("claim", [token]);
