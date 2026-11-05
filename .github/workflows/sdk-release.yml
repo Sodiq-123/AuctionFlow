@@ -44,9 +44,17 @@ jobs:
       - name: Run tests
         run: pnpm --filter auctionflow-sdk test
 
+      # Skipped when the version is already out, so re-running a release
+      # (or moving its tag) still finishes and creates the GitHub Release.
       - name: Publish to npm
         working-directory: sdk
-        run: pnpm publish --no-git-checks --access public
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if npm view "auctionflow-sdk@$version" version >/dev/null 2>&1; then
+            echo "::notice::auctionflow-sdk@$version is already on npm, not publishing it again"
+          else
+            pnpm publish --no-git-checks --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
